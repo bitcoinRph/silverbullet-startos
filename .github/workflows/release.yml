@@ -88,14 +88,19 @@ jobs:
           npm run check
           npm run build
 
-      - name: Build universal .s9pk
-        run: make universal
+      - name: Build .s9pk packages (per-arch + universal)
+        # x86 -> silverbullet_x86_64.s9pk, arm -> silverbullet_aarch64.s9pk,
+        # universal -> silverbullet.s9pk (single file that runs on either arch).
+        run: make x86 arm universal
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: SilverBullet ${{ steps.meta.outputs.version }}
-          files: silverbullet.s9pk
+          files: |
+            silverbullet_x86_64.s9pk
+            silverbullet_aarch64.s9pk
+            silverbullet.s9pk
           fail_on_unmatched_files: true
           generate_release_notes: true
