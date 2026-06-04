@@ -1,1 +1,0 @@
-SilverBullet-specific code that is shared between server and client
