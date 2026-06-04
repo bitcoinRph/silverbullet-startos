@@ -34,22 +34,36 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y squashfs-tools squashfs-tools-ng
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang libclang-dev \
+            squashfs-tools squashfs-tools-ng qemu-user-static jq
 
-      - name: Install Start CLI
+      - name: Set up QEMU (for foreign-arch image packing)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install start-cli
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL https://start9labs.github.io/start-cli | sh
-          # The installer location can vary; add the likely dirs to PATH and verify.
-          for d in "$HOME/.local/bin" "$HOME/.start9/bin" "$HOME/.start9" "/usr/local/bin"; do
-            if [ -x "$d/start-cli" ]; then echo "$d" >> "$GITHUB_PATH"; fi
-          done
-          if ! command -v start-cli >/dev/null 2>&1; then
-            loc="$(find "$HOME" /usr/local/bin -maxdepth 4 -name start-cli -type f 2>/dev/null | head -1)"
-            [ -n "$loc" ] && echo "$(dirname "$loc")" >> "$GITHUB_PATH"
+          set -euo pipefail
+          ARCH=$(uname -m)
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ASSET_NAME="start-cli_${ARCH}-${OS}"
+          DOWNLOAD_URL=$(curl -fsS \
+            -H "Authorization: token ${GH_TOKEN}" \
+            https://api.github.com/repos/Start9Labs/start-os/releases \
+            | jq -r '[.[].assets[] | select(.name=="'"$ASSET_NAME"'")] | first | .browser_download_url')
+          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
+            echo "Error: could not find asset '$ASSET_NAME' in Start9Labs/start-os releases" >&2
+            exit 1
           fi
-
-      - name: Verify Start CLI
-        run: start-cli --version
+          curl -fsSL \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "$DOWNLOAD_URL" -o /tmp/start-cli
+          sudo install -m 755 /tmp/start-cli /usr/local/bin/start-cli
+          rm /tmp/start-cli
+          start-cli --version
 
       - name: Initialize developer signing key
         run: start-cli init-key
