@@ -1,0 +1,77 @@
+name: Build and Release
+
+# Builds the .s9pk and publishes a GitHub Release on every merge to main
+# (i.e. every merged pull request), and on manual dispatch.
+#
+# The release tag is derived from the package version in
+# startos/versions/current.ts. Bump that version to cut a new release;
+# merges without a version change refresh the artifact on the existing release.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools squashfs-tools-ng
+
+      - name: Install Start CLI
+        run: |
+          curl -fsSL https://start9labs.github.io/start-cli | sh
+          # The installer location can vary; add the likely dirs to PATH and verify.
+          for d in "$HOME/.local/bin" "$HOME/.start9/bin" "$HOME/.start9" "/usr/local/bin"; do
+            if [ -x "$d/start-cli" ]; then echo "$d" >> "$GITHUB_PATH"; fi
+          done
+          if ! command -v start-cli >/dev/null 2>&1; then
+            loc="$(find "$HOME" /usr/local/bin -maxdepth 4 -name start-cli -type f 2>/dev/null | head -1)"
+            [ -n "$loc" ] && echo "$(dirname "$loc")" >> "$GITHUB_PATH"
+          fi
+
+      - name: Verify Start CLI
+        run: start-cli --version
+
+      - name: Initialize developer signing key
+        run: start-cli init-key
+
+      - name: Determine version and tag
+        id: meta
+        run: |
+          ver="$(grep -oE "version: *'[^']+'" startos/versions/current.ts | head -1 | sed -E "s/version: *'//; s/'//")"
+          if [ -z "$ver" ]; then echo "Could not read version from current.ts" >&2; exit 1; fi
+          tag="v$(echo "$ver" | tr ':' '-')"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building $ver (tag $tag)"
+
+      - name: Build universal .s9pk
+        run: make universal
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: SilverBullet ${{ steps.meta.outputs.version }}
+          files: silverbullet.s9pk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
