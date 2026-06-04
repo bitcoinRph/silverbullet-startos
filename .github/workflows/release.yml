@@ -78,6 +78,16 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Building $ver (tag $tag)"
 
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Type-check and build the JS bundle
+        # start-cli reads the manifest from javascript/index.js, so the bundle
+        # must exist before list-ingredients/pack run.
+        run: |
+          npm run check
+          npm run build
+
       - name: Build universal .s9pk
         run: make universal
 
