@@ -1,0 +1,48 @@
+import { LangDict } from './default'
+
+export default {
+  es_ES: {
+    0: 'Iniciando SilverBullet',
+    1: 'Interfaz web',
+    2: 'La interfaz web está lista',
+    3: 'La interfaz web no está lista',
+    4: 'Interfaz web',
+    5: 'La interfaz web de SilverBullet',
+    6: 'Obtener credenciales',
+    7: 'Recupere su nombre de usuario y contraseña de SilverBullet',
+    8: 'Recupere las credenciales de inicio de sesión de SilverBullet',
+  },
+  de_DE: {
+    0: 'SilverBullet wird gestartet',
+    1: 'Weboberfläche',
+    2: 'Die Weboberfläche ist bereit',
+    3: 'Die Weboberfläche ist nicht bereit',
+    4: 'Weboberfläche',
+    5: 'Die Weboberfläche von SilverBullet',
+    6: 'Zugangsdaten abrufen',
+    7: 'Rufen Sie Ihren SilverBullet-Benutzernamen und Ihr Passwort ab',
+    8: 'Rufen Sie Ihre SilverBullet-Anmeldedaten ab',
+  },
+  pl_PL: {
+    0: 'Uruchamianie SilverBullet',
+    1: 'Interfejs webowy',
+    2: 'Interfejs webowy jest gotowy',
+    3: 'Interfejs webowy nie jest gotowy',
+    4: 'Interfejs webowy',
+    5: 'Interfejs webowy SilverBullet',
+    6: 'Pobierz dane logowania',
+    7: 'Pobierz nazwę użytkownika i hasło SilverBullet',
+    8: 'Pobierz dane logowania do SilverBullet',
+  },
+  fr_FR: {
+    0: 'Démarrage de SilverBullet',
+    1: 'Interface web',
+    2: "L'interface web est prête",
+    3: "L'interface web n'est pas prête",
+    4: 'Interface web',
+    5: "L'interface web de SilverBullet",
+    6: 'Obtenir les identifiants',
+    7: "Récupérez votre nom d'utilisateur et votre mot de passe SilverBullet",
+    8: 'Récupérez vos identifiants de connexion SilverBullet',
+  },
+} satisfies Record<string, LangDict>

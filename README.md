@@ -1,114 +1,178 @@
-![GitHub Repo stars](https://img.shields.io/github/stars/silverbulletmd/silverbullet)
-![Docker Pulls](https://img.shields.io/docker/pulls/zefhemel/silverbullet)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/silverbulletmd/silverbullet/total)
-![GitHub contributors](https://img.shields.io/github/contributors/silverbulletmd/silverbullet)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/silverbulletmd/silverbullet)
+<p align="center">
+  <img src="icon.png" alt="SilverBullet Logo" width="21%">
+</p>
 
-# SilverBullet
-SilverBullet is a Programmable, Private, Browser-based, Open Source, Self Hosted, Personal Knowledge Database — a fancy term for a "notes app on steroids".
+# SilverBullet on StartOS
 
-_Yowza!_ That surely is a lot of adjectives to describe a browser-based Markdown editor programmable with Lua.
+> **Upstream repo:** <https://github.com/silverbulletmd/silverbullet>
+> **Upstream docs:** <https://silverbullet.md/>
+>
+> Everything not listed in this document behaves the same as upstream
+> SilverBullet 2.8.1. If a feature, setting, or behavior is not mentioned here,
+> the upstream documentation is accurate and fully applicable.
 
-Let’s get more specific.
+[SilverBullet](https://silverbullet.md/) is an open-source, self-hosted personal
+knowledge management app. Your notes live as plain Markdown files in a single
+folder ("space"), enriched with wiki-style linking, a built-in query language,
+and the Space Lua scripting environment.
 
-SilverBullet combines a clean live-preview editor with wiki-style linking, a built-in database and query language, and a fully integrated Space Lua scripting environment, turning your notes into a programmable system that grows with you.
+---
 
-In SilverBullet you keep your content as a collection of Markdown Pages (called a Space). You navigate your space using the Page Picker like a traditional notes app, or through Links like a wiki (except they are bi-directional).
+## Table of Contents
 
-If you are the **writer** type, you’ll appreciate SilverBullet as a clean Markdown editor with Live Preview. If you have more of an **outliner** personality, SilverBullet has Outlining tools for you. Productivity freak? Have a look at Tasks. More of a **database** person? You will appreciate Objects and Queries (SLIQ). 
+- [Image and Container Runtime](#image-and-container-runtime)
+- [Volume and Data Layout](#volume-and-data-layout)
+- [Installation and First-Run Flow](#installation-and-first-run-flow)
+- [Configuration Management](#configuration-management)
+- [Network Access and Interfaces](#network-access-and-interfaces)
+- [Actions (StartOS UI)](#actions-startos-ui)
+- [Backups and Restore](#backups-and-restore)
+- [Health Checks](#health-checks)
+- [Dependencies](#dependencies)
+- [Limitations and Differences](#limitations-and-differences)
+- [What Is Unchanged from Upstream](#what-is-unchanged-from-upstream)
+- [Quick Reference for AI Consumers](#quick-reference-for-ai-consumers)
 
-And if you are comfortable **programming** a little bit — now we’re really talking. You will love _dynamically generating content_ with Space Lua (SilverBullet’s Lua dialect), or to use it to create custom Commands, Page Templates or Widgets.
+---
 
-You were told there’s no such thing as a silver bullet. You were told wrong.
+## Image and Container Runtime
 
-[Much more detail can be found on silverbullet.md](https://silverbullet.md)
+| Property      | Value                                            |
+| ------------- | ------------------------------------------------ |
+| Image         | `ghcr.io/silverbulletmd/silverbullet:2.8.1`      |
+| Architectures | x86_64, aarch64                                  |
+| Entrypoint    | Upstream default (`tini` → `docker-entrypoint.sh` → `silverbullet`) |
 
-## Installing SilverBullet
-Check out the [instructions](https://silverbullet.md/Install).
+The official multi-arch image is used unmodified. The server is configured
+entirely through the upstream `SB_*` environment variables (see below).
 
-## Developing SilverBullet
-SilverBullet's frontend is written in [TypeScript](https://www.typescriptlang.org/) and built on top of the excellent [CodeMirror 6](https://codemirror.net/) editor component. Additional UI is built using [Preact](https://preactjs.com). [ESBuild](https://esbuild.github.io) is used to build the frontend.
+---
 
-The server backend is written in Go.
+## Volume and Data Layout
 
-## Code structure
-* `client/`: The SilverBullet client, implemented with TypeScript
-* `server/`: The SilverBullet server, written in Go
-* `plugs`: Set of built-in plugs that are distributed with SilverBullet
-* `libraries`: A set of libraries (space scripts, page templates, slash templates) distributed with SilverBullet
-* `plug-api/`: Useful APIs for use in plugs
-  * `lib/`: Useful libraries to be used in plugs
-  * `syscalls/`: TypeScript wrappers around syscalls
-  * `types/`: Various (client) types that can be references from plugs
-* `bin`
-  * `plug_compile.ts` the plug compiler
-* `scripts/`: Useful scripts
-* `website/`: silverbullet.md website content
+| Volume | Mount Point | Purpose                                        |
+| ------ | ----------- | ---------------------------------------------- |
+| `main` | `/space`    | Your SilverBullet space (Markdown + attachments) |
 
-### Requirements
-* [Node.js](https://nodejs.org/) 24+ and npm 10+: Used to build the frontend and plugs
-* [Go](https://go.dev/): Used to build the backend
+- The `main` volume's `space/` subpath is mounted at `/space` (SilverBullet's
+  `SB_FOLDER`). Mounting a subpath — rather than the volume root — keeps the
+  package's own state file out of your notes.
+- `store.json` lives at the **root** of the `main` volume (outside `/space`) and
+  holds the generated login password. It never appears as a note.
 
-The project includes `.nvmrc` and `.node-version` files. If you use [nvm](https://github.com/nvm-sh/nvm) or another Node version manager, it will automatically use the correct Node.js version:
+---
 
-```shell
-nvm use  # If using nvm
-```
+## Installation and First-Run Flow
 
-It's convenient to also install [air](https://github.com/air-verse/air) for development, this will automatically rebuild both the frontend and backend when changes are made:
+- On a fresh install, a random 22-character password is generated and stored in
+  `store.json`. It is supplied to SilverBullet as `SB_USER=admin:<password>`,
+  enabling built-in authentication out of the box.
+- A **critical task** prompts you to run the **Get Credentials** action to
+  retrieve your username and password.
+- There is no upstream setup wizard — log in and start writing.
 
-```shell
-go install github.com/air-verse/air@latest
-```
-Make sure your `$GOPATH/bin` is in your $PATH.
+---
 
-First, install dependencies:
+## Configuration Management
 
-```shell
-make setup
-```
+| StartOS-Managed (env vars)                        | Upstream-Managed                          |
+| ------------------------------------------------- | ----------------------------------------- |
+| `SB_HOSTNAME`, `SB_PORT`, `SB_FOLDER`, `SB_USER`  | Everything else (Space Lua config, themes, settings pages, libraries, etc.) |
 
-To build everything and run the server (which automatically restarts upon file changing):
+The login username is fixed to `admin`; the password is generated at install.
+All other SilverBullet behavior is configured from within the app, exactly as
+documented upstream.
 
-```shell
-air <PATH-TO-YOUR-SPACE>
-```
+---
 
-Alternatively, to build:
+## Network Access and Interfaces
 
-```shell
-make
-```
+| Interface | Port | Protocol | Purpose                |
+| --------- | ---- | -------- | ---------------------- |
+| Web UI    | 3000 | HTTP     | SilverBullet web app   |
 
-To run the resulting server:
+**Access methods:**
 
-```shell
-./silverbullet <PATH-TO-YOUR-SPACE>
-```
+- LAN IP with unique port
+- `<hostname>.local` with unique port
+- Tor `.onion` address
+- Custom domains (if configured)
 
-### Useful development tasks
+---
 
-```shell
-# Clean all generated files
-make clean
-# Typecheck and lint all code
-make check
-# Format all code
-make fmt
-# Run all tests
-make test
-# Run benchmarks
-make bench
-```
+## Actions (StartOS UI)
 
-### Build a docker container
-Note, you do not need Node.js nor Go locally installed for this to work:
+| Action            | Purpose                                   | Visibility | Availability | Output                |
+| ----------------- | ----------------------------------------- | ---------- | ------------ | --------------------- |
+| **Get Credentials** | Retrieve the login username and password | Enabled    | Any status   | Username + masked password |
 
-```shell
-docker build -t silverbullet .
-```
+---
 
-To run:
-```shell
-docker run -p 3000:3000 -v <PATH-TO-YOUR-SPACE>:/space silverbullet
+## Backups and Restore
+
+**Included in backup:**
+
+- `main` volume — your entire space (notes and attachments) plus `store.json`
+  (the generated password).
+
+**Restore behavior:** The volume is fully restored before the service starts, so
+your notes and existing credentials are preserved.
+
+---
+
+## Health Checks
+
+| Check         | Method                | Messages                                                                        |
+| ------------- | --------------------- | ------------------------------------------------------------------------------- |
+| Web Interface | Port listening (3000) | Success: "The web interface is ready" / Error: "The web interface is not ready" |
+
+---
+
+## Dependencies
+
+None.
+
+---
+
+## Limitations and Differences
+
+1. **Authentication is always on.** Unlike a bare `docker run`, this package
+   always sets `SB_USER`, so a login is required. Retrieve the password via the
+   Get Credentials action.
+2. **Single fixed user.** The username is `admin`. Multi-user setups and custom
+   `SB_USER` values are not exposed.
+3. **Port is fixed at 3000** internally; StartOS maps it to its own interfaces.
+4. **`CONTAINER_BOOT.md` auto-execution** (an upstream entrypoint feature) is
+   untested in this package and not recommended.
+
+---
+
+## What Is Unchanged from Upstream
+
+- The Markdown editor, live preview, wiki links, page navigation.
+- The built-in `query`/`template` system and Space Lua scripting.
+- Libraries, plugs, themes, and all in-app settings.
+- The on-disk format: plain Markdown files in your space folder.
+
+---
+
+## Quick Reference for AI Consumers
+
+```yaml
+package_id: silverbullet
+upstream_version: 2.8.1
+image: ghcr.io/silverbulletmd/silverbullet:2.8.1
+architectures: [x86_64, aarch64]
+volumes:
+  main: /space
+ports:
+  ui: 3000
+dependencies: none
+startos_managed_env_vars:
+  - SB_HOSTNAME
+  - SB_PORT
+  - SB_FOLDER
+  - SB_USER
+actions:
+  - get-credentials
 ```
