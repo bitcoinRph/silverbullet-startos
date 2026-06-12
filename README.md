@@ -8,7 +8,7 @@
 > **Upstream docs:** <https://silverbullet.md/>
 >
 > Everything not listed in this document behaves the same as upstream
-> SilverBullet 2.8.1. If a feature, setting, or behavior is not mentioned here,
+> SilverBullet 2.9.0. If a feature, setting, or behavior is not mentioned here,
 > the upstream documentation is accurate and fully applicable.
 
 [SilverBullet](https://silverbullet.md/) is an open-source, self-hosted personal
@@ -39,7 +39,7 @@ and the Space Lua scripting environment.
 
 | Property      | Value                                            |
 | ------------- | ------------------------------------------------ |
-| Image         | `ghcr.io/silverbulletmd/silverbullet:2.8.1`      |
+| Image         | `ghcr.io/silverbulletmd/silverbullet:2.9.0`      |
 | Architectures | x86_64, aarch64                                  |
 | Entrypoint    | Upstream default (`tini` → `docker-entrypoint.sh` → `silverbullet`) |
 
@@ -144,6 +144,9 @@ None.
 3. **Port is fixed at 3000** internally; StartOS maps it to its own interfaces.
 4. **`CONTAINER_BOOT.md` auto-execution** (an upstream entrypoint feature) is
    untested in this package and not recommended.
+5. **Auth cookie handling is stricter in 2.9.0.** If login behaves oddly behind
+   a proxy, verify the StartOS URL/scheme forwarding before assuming a package
+   regression.
 
 ---
 
@@ -160,8 +163,8 @@ None.
 
 ```yaml
 package_id: silverbullet
-upstream_version: 2.8.1
-image: ghcr.io/silverbulletmd/silverbullet:2.8.1
+upstream_version: 2.9.0
+image: ghcr.io/silverbulletmd/silverbullet:2.9.0
 architectures: [x86_64, aarch64]
 volumes:
   main: /space
