@@ -72,8 +72,8 @@ jobs:
       - name: Determine version and tag
         id: meta
         run: |
-          ver="$(grep -oE "version: *'[^']+'" startos/versions/current.ts | head -1 | sed -E "s/version: *'//; s/'//")"
-          if [ -z "$ver" ]; then echo "Could not read version from current.ts" >&2; exit 1; fi
+          ver="$(node -e "const fs = require('fs'); const s = fs.readFileSync('startos/versions/current.ts', 'utf8'); const m = s.match(/export const current = VersionInfo\\.of\\(\\{[\\s\\S]*?version: *'([^']+)'/); if (!m) process.exit(1); console.log(m[1])")"
+          if [ -z "$ver" ]; then echo "Could not read current version from current.ts" >&2; exit 1; fi
           tag="v$(echo "$ver" | tr ':' '-')"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
