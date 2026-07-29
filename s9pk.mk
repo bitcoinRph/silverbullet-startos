@@ -2,7 +2,9 @@
 # This file is imported by ./Makefile. Make edits there
 
 PACKAGE_ID := $(shell awk -F"'" '/id:/ {print $$2}' startos/manifest/index.ts)
-INGREDIENTS := $(shell start-cli s9pk list-ingredients 2>/dev/null)
+START_CLI ?= start-cli
+START_CLI_S9PK ?= $(START_CLI) -H http://localhost s9pk
+INGREDIENTS := $(shell $(START_CLI_S9PK) list-ingredients 2>/dev/null)
 # Resolve the actual git dir so this works inside git worktrees, where .git
 # is a file pointing at <main>/.git/worktrees/<name> rather than a directory.
 GIT_DIR := $(shell git rev-parse --git-dir 2>/dev/null)
@@ -23,7 +25,7 @@ endif
 .SECONDARY:
 
 define SUMMARY
-	@manifest=$$(start-cli s9pk inspect $(1) manifest); \
+	@manifest=$$($(START_CLI_S9PK) inspect $(1) manifest); \
 	size=$$(du -h $(1) | awk '{print $$1}'); \
 	title=$$(printf '%s' "$$manifest" | jq -r .title); \
 	version=$$(printf '%s' "$$manifest" | jq -r .version); \
@@ -66,12 +68,12 @@ riscv riscv64: arch/riscv64
 $(BASE_NAME).s9pk: $(INGREDIENTS) $(GIT_DEPS)
 	@$(MAKE) --no-print-directory ingredients
 	@echo "   Packing '$@'..."
-	start-cli s9pk pack -o $@
+	$(START_CLI_S9PK) pack -o $@
 
 $(BASE_NAME)_%.s9pk: $(INGREDIENTS) $(GIT_DEPS)
 	@$(MAKE) --no-print-directory ingredients
 	@echo "   Packing '$@'..."
-	start-cli s9pk pack --arch=$* -o $@
+	$(START_CLI_S9PK) pack --arch=$* -o $@
 
 ingredients: $(INGREDIENTS)
 	@echo "   Re-evaluating ingredients..."

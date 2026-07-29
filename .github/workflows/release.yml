@@ -49,24 +49,25 @@ jobs:
           ARCH=$(uname -m)
           OS=$(uname -s | tr '[:upper:]' '[:lower:]')
           ASSET_NAME="start-cli_${ARCH}-${OS}"
-          DOWNLOAD_URL=$(curl -fsS \
-            -H "Authorization: token ${GH_TOKEN}" \
-            https://api.github.com/repos/Start9Labs/start-os/releases \
-            | jq -r '[.[].assets[] | select(.name=="'"$ASSET_NAME"'")] | first | .browser_download_url')
+          DOWNLOAD_URL=$(curl -fsSL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            'https://api.github.com/repos/Start9Labs/start-technologies/releases?per_page=30' \
+            | jq -r --arg asset "$ASSET_NAME" '[.[] | select(.tag_name | startswith("start-cli/")) | .assets[] | select(.name == $asset) | .browser_download_url][0] // empty')
           if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
-            echo "Error: could not find asset '$ASSET_NAME' in Start9Labs/start-os releases" >&2
+            echo "Error: could not find asset '$ASSET_NAME' in Start9Labs/start-technologies start-cli releases" >&2
             exit 1
           fi
-          curl -fsSL \
-            -H "Authorization: token ${GH_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "$DOWNLOAD_URL" -o /tmp/start-cli
+          curl -fsSL "$DOWNLOAD_URL" -o /tmp/start-cli
           sudo install -m 755 /tmp/start-cli /usr/local/bin/start-cli
           rm /tmp/start-cli
           start-cli --version
 
       - name: Initialize developer signing key
         run: start-cli init-key
+
+      - name: Initialize StartOS packaging workspace
+        run: start-cli s9pk init-workspace ..
 
       - name: Determine version and tag
         id: meta
