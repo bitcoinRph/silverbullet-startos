@@ -8,7 +8,7 @@
 > **Upstream docs:** <https://silverbullet.md/>
 >
 > Everything not listed in this document behaves the same as upstream
-> SilverBullet 2.10.0. If a feature, setting, or behavior is not mentioned here,
+> SilverBullet 2.11.0. If a feature, setting, or behavior is not mentioned here,
 > the upstream documentation is accurate and fully applicable.
 
 [SilverBullet](https://silverbullet.md/) is an open-source, self-hosted personal
@@ -39,7 +39,7 @@ and the Space Lua scripting environment.
 
 | Property      | Value                                            |
 | ------------- | ------------------------------------------------ |
-| Image         | `ghcr.io/silverbulletmd/silverbullet:2.10.0`     |
+| Image         | `ghcr.io/silverbulletmd/silverbullet:2.11.0`     |
 | Architectures | x86_64, aarch64                                  |
 | Entrypoint    | Upstream default (`tini` → `docker-entrypoint.sh` → `silverbullet`) |
 
@@ -52,12 +52,14 @@ entirely through the upstream `SB_*` environment variables (see below).
 
 | Volume | Mount Point | Purpose                                        |
 | ------ | ----------- | ---------------------------------------------- |
-| `main` | `/space`    | Your SilverBullet space (Markdown + attachments) |
+| `main` | `/data`     | Your SilverBullet space (Markdown + attachments) |
 
-- The `main` volume's `space/` subpath is mounted at `/space` (SilverBullet's
+- The `main` volume's `space/` subpath is mounted at `/data` (SilverBullet's
   `SB_FOLDER`). Mounting a subpath — rather than the volume root — keeps the
-  package's own state file out of your notes.
-- `store.json` lives at the **root** of the `main` volume (outside `/space`) and
+  package's own state file out of your notes. SilverBullet 2.11.0 still honors
+  `/space` as a legacy mount point, but `/data` is now the upstream-preferred
+  container data folder.
+- `store.json` lives at the **root** of the `main` volume (outside `/data`) and
   holds the generated login password. It never appears as a note.
 
 ---
@@ -69,8 +71,8 @@ entirely through the upstream `SB_*` environment variables (see below).
   enabling built-in authentication out of the box.
 - A **critical task** prompts you to run the **Get Credentials** action to
   retrieve your username and password.
-- SilverBullet 2.10.0 adds an upstream setup wizard for unmanaged fresh
-  installs. This StartOS package continues to provide StartOS-managed
+- SilverBullet includes an upstream setup wizard for unmanaged fresh installs.
+  This StartOS package continues to provide StartOS-managed
   single-space credentials through `SB_USER`, so the first-run flow remains:
   run **Get Credentials**, log in as `admin`, and start writing.
 
@@ -143,17 +145,23 @@ None.
    always sets `SB_USER`, so a login is required. Retrieve the password via the
    Get Credentials action.
 2. **Single fixed StartOS-managed user.** The username is `admin`. SilverBullet
-   2.10.0 includes upstream multi-account and multi-space features, but this
+   2.11.0 includes upstream multi-account, multi-space, collaboration, SSO,
+   permissions, comments, and revision features, but this
    package does not yet expose StartOS actions for managing them. Use the
    upstream UI with care and back up before changing space/account topology.
 3. **Port is fixed at 3000** internally; StartOS maps it to its own interfaces.
 4. **`CONTAINER_BOOT.md` auto-execution** (an upstream entrypoint feature) is
    untested in this package and not recommended.
-5. **2.10.0 changes the server/CLI backend from Go to Rust and changes the
+5. **2.10.0 changed the server/CLI backend from Go to Rust and changed the
    upstream Docker health endpoint from `/.ping` to `/.instance`.** This package
    still uses a StartOS port-listening readiness check; if login or space routing
    behaves oddly behind a proxy, verify the StartOS URL/scheme forwarding before
    assuming a package regression.
+6. **2.11.0 changes the upstream container entrypoint/data-folder behavior.**
+   The image now prefers `/data` and treats `/space` as legacy. This package
+   mounts the same persistent StartOS `main/space` subpath at `/data`, so notes
+   and credentials remain in the same StartOS volume while avoiding upstream's
+   legacy-path warning.
 
 ---
 
@@ -170,11 +178,11 @@ None.
 
 ```yaml
 package_id: silverbullet
-upstream_version: 2.10.0
-image: ghcr.io/silverbulletmd/silverbullet:2.10.0
+upstream_version: 2.11.0
+image: ghcr.io/silverbulletmd/silverbullet:2.11.0
 architectures: [x86_64, aarch64]
 volumes:
-  main: /space
+  main: /data
 ports:
   ui: 3000
 dependencies: none

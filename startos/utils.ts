@@ -9,4 +9,5 @@ export const username = 'admin'
 // Where the SilverBullet "space" (your Markdown files) lives in the container.
 // The main volume is mounted here via a dedicated subpath so package state
 // (store.json) stays out of the user's space folder.
-export const spaceDir = '/space'
+// SilverBullet 2.11.0 keeps /space as a legacy fallback but recommends /data.
+export const spaceDir = '/data'
