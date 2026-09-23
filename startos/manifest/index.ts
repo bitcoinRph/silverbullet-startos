@@ -13,7 +13,7 @@ export const manifest = setupManifest({
   volumes: ['main'],
   images: {
     silverbullet: {
-      source: { dockerTag: 'ghcr.io/silverbulletmd/silverbullet:2.11.0' },
+      source: { dockerTag: 'ghcr.io/silverbulletmd/silverbullet:2.11.1' },
       arch: ['x86_64', 'aarch64'],
     },
   },
