@@ -5,7 +5,7 @@ export const manifest = setupManifest({
   id: 'silverbullet',
   title: 'SilverBullet',
   license: 'MIT',
-  packageRepo: 'https://github.com/bitcoinrph/ai-service-packaging',
+  packageRepo: 'https://github.com/bitcoinRph/silverbullet-startos',
   upstreamRepo: 'https://github.com/silverbulletmd/silverbullet',
   marketingUrl: 'https://silverbullet.md',
   donationUrl: null,
@@ -13,7 +13,7 @@ export const manifest = setupManifest({
   volumes: ['main'],
   images: {
     silverbullet: {
-      source: { dockerTag: 'ghcr.io/silverbulletmd/silverbullet:2.11.1' },
+      source: { dockerTag: 'ghcr.io/silverbulletmd/silverbullet:2.12.1' },
       arch: ['x86_64', 'aarch64'],
     },
   },

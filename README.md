@@ -75,6 +75,10 @@ entirely through the upstream `SB_*` environment variables (see below).
   This StartOS package continues to provide StartOS-managed
   single-space credentials through `SB_USER`, so the first-run flow remains:
   run **Get Credentials**, log in as `admin`, and start writing.
+- Startup fails closed before creating a container if the credential store is
+  missing, malformed, unreadable, or contains unusable credentials. A critical
+  recovery task directs you to restore a known-good backup including root
+  `store.json`. The package never silently replaces restored credentials.
 
 ---
 
