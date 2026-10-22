@@ -5,7 +5,7 @@ name: Build and Release
 #
 # The release tag is derived from the package version in
 # startos/versions/current.ts. Bump that version to cut a new release;
-# merges without a version change refresh the artifact on the existing release.
+# existing tags/releases are immutable: bump the version instead of replacing assets.
 
 on:
   push:
@@ -14,17 +14,23 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -35,73 +41,133 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang libclang-dev \
-            squashfs-tools squashfs-tools-ng qemu-user-static jq
+            build-essential clang libclang-dev curl git jq \
+            squashfs-tools squashfs-tools-ng
 
       - name: Set up QEMU (for foreign-arch image packing)
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
-      - name: Install start-cli
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Set up OCI-capable Docker builder
+        uses: docker/setup-buildx-action@v3
+
+      - name: Verify Docker
         run: |
           set -euo pipefail
-          ARCH=$(uname -m)
-          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-          ASSET_NAME="start-cli_${ARCH}-${OS}"
-          DOWNLOAD_URL=$(curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            'https://api.github.com/repos/Start9Labs/start-technologies/releases?per_page=30' \
-            | jq -r --arg asset "$ASSET_NAME" '[.[] | select(.tag_name | startswith("start-cli/")) | .assets[] | select(.name == $asset) | .browser_download_url][0] // empty')
-          if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
-            echo "Error: could not find asset '$ASSET_NAME' in Start9Labs/start-technologies start-cli releases" >&2
-            exit 1
-          fi
-          curl -fsSL "$DOWNLOAD_URL" -o /tmp/start-cli
-          sudo install -m 755 /tmp/start-cli /usr/local/bin/start-cli
-          rm /tmp/start-cli
+          docker version
+          docker buildx version
+          docker run --rm hello-world
+
+      - name: Install official Start CLI
+        # Documented installer; only executed on the ephemeral CI runner.
+        # https://docs.start9.com/packaging/0.4.0.x/environment-setup.html
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://start9.com/start-cli/install.sh \
+            --output "$RUNNER_TEMP/install-start-cli.sh"
+          sh "$RUNNER_TEMP/install-start-cli.sh"
+          export PATH="$HOME/.local/bin:$PATH"
+          printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
           start-cli --version
 
-      - name: Initialize developer signing key
-        run: start-cli init-key
-
-      - name: Initialize StartOS packaging workspace
-        run: start-cli s9pk init-workspace ..
+      - name: Initialize isolated packaging workspace
+        # Parent workspace creates an ephemeral key, not a production identity.
+        run: |
+          set -euo pipefail
+          cd ..
+          start-cli s9pk init-workspace .
+          test -f .startos/build.key.pem
 
       - name: Determine version and tag
         id: meta
         run: |
-          ver="$(node -e "const fs = require('fs'); const s = fs.readFileSync('startos/versions/current.ts', 'utf8'); const m = s.match(/export const current = VersionInfo\\.of\\(\\{[\\s\\S]*?version: *'([^']+)'/); if (!m) process.exit(1); console.log(m[1])")"
-          if [ -z "$ver" ]; then echo "Could not read current version from current.ts" >&2; exit 1; fi
-          tag="v$(echo "$ver" | tr ':' '-')"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Building $ver (tag $tag)"
+          set -euo pipefail
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const source = fs.readFileSync('startos/versions/current.ts', 'utf8');
+          const match = source.match(/export\s+const\s+current\s*=\s*VersionInfo\.of\(\{\s*version:\s*(['"])([^'"\r\n]+)\1\s*,/);
+          if (!match) throw new Error('Expected current with quoted ExVer version');
+          const version = match[2];
+          // Preserve full upstream versions, including prerelease suffixes.
+          if (!/^(?:#[A-Za-z0-9.-]+:)?\d+(?:\.\d+)*(?:-[A-Za-z0-9.-]+)?:\d+$/.test(version)) {
+            throw new Error('Invalid package ExVer');
+          }
+          console.log(`version=${version}`);
+          console.log(`tag=v${version.replaceAll(':', '_')}`);
+          NODE
+
+      - name: Refuse existing release or tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git check-ref-format "refs/tags/$TAG"
+          for endpoint in "git/ref/tags/$TAG" "releases/tags/$TAG"; do
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint")
+            case "$status" in
+              404) ;;
+              200) echo "Refusing to replace existing $endpoint" >&2; exit 1 ;;
+              *) echo "Cannot safely check $endpoint (HTTP $status)" >&2; exit 1 ;;
+            esac
+          done
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Type-check and build the JS bundle
+      - name: Test, type-check and build the JS bundle
         # start-cli reads the manifest from javascript/index.js, so the bundle
         # must exist before list-ingredients/pack run.
         run: |
+          set -euo pipefail
+          npm test
           npm run check
           npm run build
 
       - name: Build .s9pk packages (per-arch + universal)
         # x86 -> silverbullet_x86_64.s9pk, arm -> silverbullet_aarch64.s9pk,
         # universal -> silverbullet.s9pk (single file that runs on either arch).
-        run: make x86 arm universal
+        run: |
+          set -euo pipefail
+          make x86 arm universal
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: SilverBullet ${{ steps.meta.outputs.version }}
-          files: |
-            silverbullet_x86_64.s9pk
-            silverbullet_aarch64.s9pk
-            silverbullet.s9pk
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+      - name: Generate and verify SHA256
+        run: |
+          set -euo pipefail
+          for package in silverbullet_x86_64.s9pk silverbullet_aarch64.s9pk silverbullet.s9pk; do
+            test -s "$package"
+            sha256sum "$package" > "$package.sha256"
+            sha256sum --check "$package.sha256"
+          done
+
+      - name: Publish new GitHub Release (never replace assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Recheck immediately before publication. Inputs go through env, not shell interpolation.
+          for endpoint in "git/ref/tags/$TAG" "releases/tags/$TAG"; do
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/$endpoint")
+            case "$status" in
+              404) ;;
+              200) echo "Refusing to replace existing $endpoint" >&2; exit 1 ;;
+              *) echo "Cannot safely check $endpoint (HTTP $status)" >&2; exit 1 ;;
+            esac
+          done
+          # create fails on existing releases; never delete or clobber assets.
+          # Pin a newly created tag to this run's commit, not the moving main HEAD.
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "SilverBullet $VERSION" --generate-notes \
+            silverbullet_x86_64.s9pk silverbullet_x86_64.s9pk.sha256 \
+            silverbullet_aarch64.s9pk silverbullet_aarch64.s9pk.sha256 \
+            silverbullet.s9pk silverbullet.s9pk.sha256
