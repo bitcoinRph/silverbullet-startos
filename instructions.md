@@ -27,6 +27,15 @@ files in your space.
 - **Your space on the `main` volume** — all notes and attachments are stored
   under `/space` and are included in StartOS backups.
 
+## Credential recovery
+
+If credentials are missing, empty, invalid, or unreadable, the package refuses
+to start SilverBullet rather than exposing notes without authentication. A
+critical task explains the recovery step: restore a known-good StartOS backup
+that includes the main volume root `store.json`, then start the service and run
+**Get Credentials**. Do not delete the store or reinstall to fix this error.
+Restore does not generate a replacement password or alter your notes.
+
 ## Documentation
 
 - [SilverBullet documentation](https://silverbullet.md/) — full guide to the

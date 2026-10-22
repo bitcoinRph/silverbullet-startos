@@ -56,18 +56,18 @@ export const v2_11_0_0 = VersionInfo.of({
 })
 
 export const current = VersionInfo.of({
-  version: '2.11.1:0',
+  version: '2.12.1:0',
   releaseNotes: {
     en_US:
-      'Updates SilverBullet to 2.11.1 with upstream fixes for Git/revision history, direct HTML/CSS/JavaScript opening, readable dark-mode tooltips, longer Git connection checks, Mention Inbox access from Space Lua/CLI, richer document and media viewing, and drag-and-drop uploads.',
+      'Updates SilverBullet to 2.12.1 with mobile and large-space performance improvements, hidden-file API protection, and proxy ETag fixes. Breaking Space Lua change: replace view.new with widget.new and pass widget to view.define. Preserves StartOS-managed credentials and notes, runs the upstream tini entrypoint as PID 1, and corrects the package repository link. Full notes: https://github.com/silverbulletmd/silverbullet/blob/2.12.1/docs/CHANGELOG.md',
     es_ES:
-      'Actualiza SilverBullet a 2.11.1 con correcciones upstream para Git/historial de revisiones, apertura directa de HTML/CSS/JavaScript, tooltips legibles en modo oscuro, comprobaciones Git más largas, acceso a Mention Inbox desde Space Lua/CLI, vista de más documentos y medios, y cargas por arrastrar y soltar.',
+      'Actualiza SilverBullet a 2.12.1 con mejoras móviles y de rendimiento, protección de archivos ocultos y correcciones ETag. Cambio incompatible en Space Lua: sustituya view.new por widget.new y pase widget a view.define. Conserva credenciales y notas, ejecuta tini como PID 1 y corrige el enlace del repositorio. Notas: https://github.com/silverbulletmd/silverbullet/blob/2.12.1/docs/CHANGELOG.md',
     de_DE:
-      'Aktualisiert SilverBullet auf 2.11.1 mit Upstream-Korrekturen für Git/Revisionsverlauf, direktes Öffnen von HTML/CSS/JavaScript, lesbare Tooltips im Dark Mode, längere Git-Verbindungsprüfungen, Mention-Inbox-Zugriff aus Space Lua/CLI, umfangreichere Dokument- und Medienanzeige sowie Drag-and-drop-Uploads.',
+      'Aktualisiert SilverBullet auf 2.12.1 mit Verbesserungen für Mobilgeräte und große Spaces, Schutz versteckter Dateien und ETag-Korrekturen. Inkompatible Space-Lua-Änderung: view.new durch widget.new ersetzen und widget an view.define übergeben. Behält Anmeldedaten und Notizen bei, startet tini als PID 1 und korrigiert den Repository-Link. Hinweise: https://github.com/silverbulletmd/silverbullet/blob/2.12.1/docs/CHANGELOG.md',
     pl_PL:
-      'Aktualizuje SilverBullet do wersji 2.11.1 z poprawkami upstream dla Git/historii rewizji, bezpośredniego otwierania HTML/CSS/JavaScript, czytelnych podpowiedzi w trybie ciemnym, dłuższych kontroli połączenia Git, dostępu do Mention Inbox ze Space Lua/CLI, szerszego podglądu dokumentów i multimediów oraz przesyłania przez przeciąganie i upuszczanie.',
+      'Aktualizuje SilverBullet do 2.12.1 z usprawnieniami mobilnymi i wydajności, ochroną ukrytych plików i poprawkami ETag. Niezgodna zmiana Space Lua: zastąp view.new przez widget.new i przekaż widget do view.define. Zachowuje poświadczenia i notatki, uruchamia tini jako PID 1 i poprawia adres repozytorium. Uwagi: https://github.com/silverbulletmd/silverbullet/blob/2.12.1/docs/CHANGELOG.md',
     fr_FR:
-      'Met à jour SilverBullet vers 2.11.1 avec des correctifs upstream pour Git/l’historique des révisions, l’ouverture directe des fichiers HTML/CSS/JavaScript, les infobulles lisibles en mode sombre, des vérifications Git plus longues, l’accès à Mention Inbox depuis Space Lua/CLI, l’affichage enrichi de documents et médias, et les téléversements par glisser-déposer.',
+      'Met à jour SilverBullet vers 2.12.1 avec des améliorations mobiles et de performances, la protection des fichiers cachés et des corrections ETag. Changement incompatible Space Lua : remplacer view.new par widget.new et passer widget à view.define. Conserve identifiants et notes, exécute tini comme PID 1 et corrige le lien du dépôt. Notes : https://github.com/silverbulletmd/silverbullet/blob/2.12.1/docs/CHANGELOG.md',
   },
   migrations: {
     up: async ({ effects }) => {},
