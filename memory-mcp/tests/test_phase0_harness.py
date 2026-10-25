@@ -132,6 +132,7 @@ def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
     module = spike()
     text = "initial concurrency text"
     browser_text = text
+    editor_loaded = False
     requests = []
 
     def handler(request):
@@ -152,7 +153,19 @@ def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
 
     def insert_text(value):
         nonlocal browser_text
+        assert editor_loaded, "must wait for note content, not only visible CodeMirror"
         browser_text += value
+
+    def expect_editor(target):
+        assert target is locator
+
+        def to_contain_text(expected, timeout):
+            nonlocal editor_loaded
+            assert expected == "initial concurrency text"
+            assert 0 < timeout <= 60000
+            editor_loaded = True
+
+        return SimpleNamespace(to_contain_text=to_contain_text)
 
     page = SimpleNamespace(
         goto=lambda _: None,
@@ -170,6 +183,7 @@ def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
             pass
 
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", Playwright)
+    monkeypatch.setattr(playwright.sync_api, "expect", expect_editor)
     real_async_client = httpx.AsyncClient
     monkeypatch.setattr(
         module.httpx,

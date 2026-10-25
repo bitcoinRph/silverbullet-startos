@@ -104,7 +104,7 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
     # If upstream stops losing edits, fail and reevaluate the gate explicitly;
     # do not automatically enable mutations or turn this into skip/xfail.
     import asyncio
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import expect, sync_playwright
     from silverbullet_memory.client import SilverBulletClient
     from silverbullet_memory.index import MemoryIndex
     from silverbullet_memory.tools import MemoryTools
@@ -121,6 +121,8 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
             page.locator('button[type="submit"]').click()
             editor = page.locator(".cm-content")
             editor.wait_for(timeout=60000)
+            # Visibility precedes asynchronous page loading in 2.12.1.
+            expect(editor).to_contain_text("initial concurrency text", timeout=60000)
             etag = upstream.get(path).headers["etag"]
             editor.click()
             page.keyboard.press("Control+End")
