@@ -54,6 +54,8 @@ async function fixture(raw) {
   storeJson.path = path.join(root, 'store.json')
   await fs.rm(storeJson.path, { force: true })
   if (raw !== undefined) await fs.writeFile(storeJson.path, raw)
+  // Independent, disabled API fixture; all existing login assertions stay intact.
+  await require('../startos/fileModels/agent-api.json.ts').agentApi.ensure()
   utils.username = 'admin'
   subcontainers = []
   daemons = []

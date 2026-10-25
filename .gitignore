@@ -6,3 +6,10 @@ node_modules/
 docker-images
 javascript
 ncc-cache
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.sqlite*
+*.egg-info/

@@ -25,7 +25,24 @@ files in your space.
   install and supplied to SilverBullet, so your space isn't left open. Retrieve
   it any time with the **Get Credentials** action.
 - **Your space on the `main` volume** — all notes and attachments are stored
-  under `/space` and are included in StartOS backups.
+  under `/data` (the unchanged main/space subpath) and are included in StartOS backups.
+
+## Agent Business Memory (optional)
+
+The Agent API starts disabled. An operator can run Enable Agent Memory API with
+exact private proxy Host and browser Origin allowlists, then retrieve masked MCP
+credentials and use the masked `/mcp` interface. Use the read token by default.
+Never put tokens in URLs. Enable/disable and rotations restart the package.
+
+The MCP daemon indexes Markdown through authenticated `/.fs`, not a mounted space.
+Its separate index volume is disposable and excluded from backup; agent-api.json
+is backed up on main. Login store.json is not rewritten by Agent API operations.
+Rebuild Memory Index requests a rebuild without touching notes or login.
+
+This release permits reads and validated create previews only; actual writes and
+replacement are blocked pending real-client safety evidence. Retrieved notes are
+untrusted data. The experimental SilverBullet Runtime API is always disabled.
+See docs/OPERATIONS.md in the package repository before enabling this feature.
 
 ## Credential recovery
 
@@ -48,6 +65,6 @@ Restore does not generate a replacement password or alter your notes.
 - The login username is fixed to `admin`; the password is managed by this
   package (see the **Get Credentials** action). Other SilverBullet settings are
   configured from within the app, exactly as described in the upstream docs.
-- To change your password, you can update it through SilverBullet's own
-  mechanisms; the **Get Credentials** action always shows the password this
-  package configured at install.
+- Get Credentials shows the StartOS-managed login. Agent token rotation does not
+  change that login. Restore a known-good backup for credential recovery; do not
+  delete or overwrite store.json to troubleshoot the Agent API.

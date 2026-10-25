@@ -1,0 +1,4 @@
+name: silverbullet-memory
+version: 0.1.0
+description: Read-only bounded SilverBullet recall; no duplicate MCP tools or automatic writes.
+hooks: []

@@ -1,6 +1,7 @@
 import { i18n } from './i18n'
 import { sdk } from './sdk'
 import { uiPort } from './utils'
+import { agentApi } from './fileModels/agent-api.json'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const uiMulti = sdk.MultiHost.of(effects, 'ui-multi')
@@ -21,5 +22,20 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
 
   const uiReceipt = await uiMultiOrigin.export([ui])
 
-  return [uiReceipt]
+  const api = await agentApi.read().catch(() => null)
+  if (!api?.enabled) return [uiReceipt]
+  const mcpHost = sdk.MultiHost.of(effects, 'mcp-multi')
+  const mcpOrigin = await mcpHost.bindPort(3001, { protocol: 'http' })
+  const mcp = sdk.createInterface(effects, {
+    name: 'Agent Memory MCP',
+    id: 'mcp',
+    description: 'Authenticated Streamable HTTP memory API',
+    type: 'api',
+    masked: true,
+    schemeOverride: null,
+    username: null,
+    path: '/mcp',
+    query: {},
+  })
+  return [uiReceipt, await mcpOrigin.export([mcp])]
 })

@@ -1,0 +1,21 @@
+const assert = require('node:assert/strict')
+const { test } = require('node:test')
+const { readFileSync } = require('node:fs')
+const { spawnSync } = require('node:child_process')
+
+test('Phase 0 exact-image integration gate exists and cannot silently skip in CI', () => {
+  const source = readFileSync('memory-mcp/tests/test_real_image.py', 'utf8')
+  assert.match(source, /ghcr\.io\/silverbulletmd\/silverbullet:2\.12\.1/)
+  for (const gate of ['test_runtime_disabled', 'test_conditional_writes', 'test_browser_execution'])
+    assert.ok(source.includes(gate), gate)
+  const workflow = readFileSync('.github/workflows/memory.yml', 'utf8')
+  assert.ok(workflow.includes('SB_REAL_IMAGE:'))
+  assert.ok(workflow.includes('test_real_image.py'))
+})
+test('Phase 0 image manifest declares both required architectures', () => {
+  const result = spawnSync('docker', ['manifest', 'inspect', 'ghcr.io/silverbulletmd/silverbullet:2.12.1'], { encoding: 'utf8', timeout: 60000 })
+  assert.equal(result.status, 0, result.stderr)
+  const architectures = JSON.parse(result.stdout).manifests.map(m => m.platform.architecture)
+  assert.ok(architectures.includes('amd64'))
+  assert.ok(architectures.includes('arm64'))
+})

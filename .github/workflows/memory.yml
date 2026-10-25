@@ -1,0 +1,55 @@
+name: Memory source and real-image gates
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  node-contracts:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        revision: [head, merge]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision == 'head' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm test && npm run check && npm run build
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --require-hashes -r memory-mcp/requirements-dev.txt
+      - run: ruff check memory-mcp integrations/hermes
+      - run: ruff format --check memory-mcp integrations/hermes
+      - run: mypy --ignore-missing-imports memory-mcp/src
+      - run: PYTHONPATH=memory-mcp/src pytest memory-mcp/tests integrations/hermes/tests -q
+      - run: pip-audit --require-hashes -r memory-mcp/requirements.txt
+      - name: Check arm64 Python 3.12 wheels with locked hashes
+        run: |
+          pip download --require-hashes --only-binary=:all: --python-version 3.12 --platform manylinux_2_28_aarch64 --platform manylinux2014_aarch64 -r memory-mcp/requirements.txt -d "$RUNNER_TEMP/arm-wheels"
+  real-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --require-hashes -r memory-mcp/requirements-dev.txt
+      - run: playwright install --with-deps chromium
+      - run: PYTHONPATH=memory-mcp/src pytest memory-mcp/tests/test_real_image.py -v
+        env:
+          SB_REAL_IMAGE: '1'
