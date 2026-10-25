@@ -302,31 +302,38 @@ def test_real_image_permanent_page_rejection(rejection_upstream, tmp_path, case,
                     temporary = target.with_name(".invalid-byte-page.tmp")
                     temporary.write_bytes(raw)
                     temporary.replace(target)
-                    # Diagnostic only: preserve the immediate inventory result below.
-                    host_bytes = target.read_bytes()
                     host_stat = target.stat()
-                    print(
-                        "INVALID_BYTE_HOST_IMMEDIATE",
-                        host_stat.st_ino,
-                        host_stat.st_size,
-                        host_stat.st_mtime_ns,
-                        hashlib.sha256(host_bytes).hexdigest(),
-                        host_bytes.hex(),
-                    )
-                    assert host_bytes == raw
+                    assert target.read_bytes() == raw
                     assert host_stat.st_size == len(raw)
+                    # 2.12.1 ListingCachedSpace refreshes PUTs synchronously, but
+                    # external replacements arrive through the 75ms-debounced
+                    # watcher. Wait for this exact disk stamp, not an arbitrary
+                    # sleep or an alternate accepted inventory/byte outcome.
+                    deadline = time.monotonic() + 5
+                    while True:
+                        observed = {entry["name"]: entry for entry in await client.inventory()}
+                        entry = observed.get(note, {})
+                        if (
+                            entry.get("size") == host_stat.st_size
+                            and entry.get("lastModified") == host_stat.st_mtime_ns // 1_000_000
+                        ):
+                            break
+                        assert time.monotonic() < deadline, (
+                            "disk inventory did not converge",
+                            entry,
+                        )
+                        await asyncio.sleep(0.025)
                 else:
                     assert upstream.put(path, content=raw).status_code == 200
                 listed = {entry["name"]: entry for entry in await client.inventory()}
+                assert listed[note]["size"] == len(raw)
+                response = upstream.get(path)
+                assert response.status_code == 200
+                assert response.content == raw
+                assert (
+                    response.headers["etag"] == '"sha256:' + hashlib.sha256(raw).hexdigest() + '"'
+                )
                 if case == "invalid-utf8":
-                    response = upstream.get(path)
-                    print(
-                        "INVALID_BYTE_HTTP_IMMEDIATE",
-                        listed[note],
-                        response.status_code,
-                        response.headers.get("etag"),
-                        response.content.hex(),
-                    )
                     container_bytes = subprocess.check_output(
                         ["docker", "exec", upstream.container_name, "cat", "/data/" + note]
                     )
@@ -342,28 +349,9 @@ def test_real_image_permanent_page_rejection(rejection_upstream, tmp_path, case,
                         ],
                         text=True,
                     ).strip()
-                    print(
-                        "INVALID_BYTE_CONTAINER",
-                        container_stat,
-                        hashlib.sha256(container_bytes).hexdigest(),
-                        container_bytes.hex(),
-                    )
                     assert container_bytes == raw
                     assert container_stat.split()[:2] == [str(host_stat.st_ino), str(len(raw))]
-                    for attempt in range(10):
-                        observed = {entry["name"]: entry for entry in await client.inventory()}
-                        print("INVALID_BYTE_LATER_INVENTORY", attempt, observed[note])
-                        if observed[note]["size"] == len(raw):
-                            break
-                        time.sleep(0.05)
                     assert target.read_bytes() == raw
-                assert listed[note]["size"] == len(raw)
-                response = upstream.get(path)
-                assert response.status_code == 200
-                assert response.content == raw
-                assert (
-                    response.headers["etag"] == '"sha256:' + hashlib.sha256(raw).hexdigest() + '"'
-                )
                 with pytest.raises(PermanentPageError, match="^" + reason + "$"):
                     await client.get(note)
                 reads.clear()
