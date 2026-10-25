@@ -123,7 +123,7 @@ def test_disposable_fixture_captures_container_logs_before_cleanup(monkeypatch):
     assert commands[-1][:3] == ["docker", "rm", "--force"]
 
 
-def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
+def test_conflict_preservation_characterization_exercises_both_disabled_mcp_writes(
     monkeypatch, tmp_path
 ):
     import hashlib
@@ -139,7 +139,23 @@ def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
         nonlocal text, browser_text
         requests.append((request.method, request.url.path))
         if request.method == "PUT":
-            text = request.content.decode()
+            if "human-local-change" in browser_text:
+                # Simulate preservation with a human-resolution conflict, not
+                # safe automatic merging or permission to enable MCP writes.
+                text = "\n".join(
+                    [
+                        "<<<<<<< SB synthetic-agent",
+                        request.content.decode(),
+                        "||||||| SB BASE synthetic-base",
+                        text,
+                        "=======",
+                        browser_text,
+                        ">>>>>>> SB synthetic-human",
+                        "",
+                    ]
+                )
+            else:
+                text = request.content.decode()
             browser_text = text
         etag = '"sha256:' + hashlib.sha256(text.encode()).hexdigest() + '"'
         return httpx.Response(200, text=text, headers={"etag": etag})
@@ -204,18 +220,28 @@ def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
 
     async def checked_replace(self, *args, **kwargs):
         assert kwargs["dry_run"] is False
-        result = await replace(self, *args, **kwargs)
-        invoked.append(("replace", result["error"]))
-        return result
+        try:
+            return await replace(self, *args, **kwargs)
+        except ValueError as exc:
+            # Conflict markers hit the content validator before writes_disabled.
+            invoked.append(("replace", str(exc)))
+            raise
 
     monkeypatch.setattr(MemoryTools, "memory_create", checked_create)
     monkeypatch.setattr(MemoryTools, "memory_replace_text", checked_replace)
     with httpx.Client(
         base_url="http://127.0.0.1:32768", transport=httpx.MockTransport(handler)
     ) as client:
-        module.test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(client, tmp_path)
-    assert invoked == [("create", "writes_disabled"), ("replace", "writes_disabled")]
+        module.test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(client, tmp_path)
+    assert invoked == [
+        ("create", "writes_disabled"),
+        ("replace", "executable_content_not_allowed"),
+    ]
     assert [method for method, _ in requests if method != "GET"] == ["PUT", "PUT"]
+    assert "agent-conditional-change" in text
+    assert "human-local-change" in text
+    for marker in ["<<<<<<< SB", "||||||| SB BASE", "=======", ">>>>>>> SB"]:
+        assert marker in text
 
 
 def test_browser_page_url_preserves_port_separator():

@@ -98,11 +98,10 @@ def _page_url(upstream, page):
     return str(upstream.base_url.join("/" + page))
 
 
-def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_path):
-    # Characterize a STOP condition, not acceptable write behavior. This direct
-    # PUT is disposable-image-only; v1 MCP must remain read-only because of it.
-    # If upstream stops losing edits, fail and reevaluate the gate explicitly;
-    # do not automatically enable mutations or turn this into skip/xfail.
+def test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(upstream, tmp_path):
+    # This disposable-image-only PUT preserves both edits in a conflict requiring
+    # human resolution, not a safe automatic merge or permission to enable writes.
+    # v1 MCP mutations must remain hard-disabled; do not turn this into skip/xfail.
     import asyncio
     from playwright.sync_api import expect, sync_playwright
     from silverbullet_memory.client import SilverBulletClient
@@ -136,12 +135,15 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
             )
             assert result.status_code == 200, "upstream concurrency gate needs reevaluation"
             page.wait_for_timeout(7000)
-            server_text = upstream.get(path).text
+            server_bytes = upstream.get(path).content
+            server_text = server_bytes.decode("utf-8")
             assert "agent-conditional-change" in server_text
-            assert "human-local-change" not in server_text
-            assert "human-local-change" not in page.locator("body").inner_text(), (
-                "upstream concurrency gate needs reevaluation"
-            )
+            assert "human-local-change" in server_text
+            for marker in ["<<<<<<< SB", "||||||| SB BASE", "=======", ">>>>>>> SB"]:
+                assert any(
+                    line == marker or line.startswith(marker + " ")
+                    for line in server_text.splitlines()
+                ), (marker, server_text)
         finally:
             browser.close()
 
@@ -150,12 +152,13 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
             client = SilverBulletClient(str(upstream.base_url), TOKEN, http)
             index = MemoryIndex(tmp_path / "concurrency.sqlite")
             try:
-                # Test-only managed prefix reaches the replacement write gate;
+                # Test-only managed prefix reaches replacement validation;
                 # production has no managed prefixes and is stricter still.
                 tools = MemoryTools(client, index, managed_prefixes=("Inbox/",))
                 assert tools.memory_status()["writes_enabled"] is False
                 note = path.removeprefix("/.fs/")
                 before = await client.get(note)
+                assert before["content"] == server_text
                 assert (
                     tools.memory_create(
                         "Inbox/BlockedConcurrency.md",
@@ -171,7 +174,10 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
                     )["error"]
                     == "writes_disabled"
                 )
-                assert (
+                assert await client.get(note) == before
+                # Raw '<' in conflict markers fails content validation before
+                # the writes_disabled release-policy response; writes stay off.
+                with pytest.raises(ValueError, match="^executable_content_not_allowed$"):
                     await tools.memory_replace_text(
                         note,
                         before["etag"],
@@ -180,8 +186,8 @@ def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_p
                         "Verify concurrency stop condition",
                         dry_run=False,
                     )
-                )["error"] == "writes_disabled"
                 assert await client.get(note) == before
+                assert upstream.get(path).content == server_bytes
             finally:
                 index.close()
 
