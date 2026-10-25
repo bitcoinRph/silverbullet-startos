@@ -56,6 +56,19 @@ export const v2_11_0_0 = VersionInfo.of({
 })
 
 export const current = VersionInfo.of({
+  version: '2.12.1:3',
+  releaseNotes: {
+    en_US:
+      'Bound failed claimed index rebuilds with process-local exponential retry backoff. Add exact-image oversized/invalid-UTF-8 page coverage and Hermes in-flight dedupe regression tests. SilverBullet stays at 2.12.1; security, read-only policy, canonical notes and credentials are unchanged.',
+  },
+  migrations: {
+    up: async () => {},
+    // :3 changes only process-local retry state and tests; no stored schema change.
+    down: async () => {},
+  },
+})
+
+export const v2_12_1_2 = VersionInfo.of({
   version: '2.12.1:2',
   releaseNotes: {
     en_US:

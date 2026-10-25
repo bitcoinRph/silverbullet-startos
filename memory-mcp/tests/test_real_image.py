@@ -1,5 +1,6 @@
 """Phase 0: disposable exact-image evidence, NEVER run against an operator URL."""
 
+import hashlib
 import os
 import subprocess
 import time
@@ -16,9 +17,10 @@ TOKEN = "synthetic-phase0-internal-token-00000000"
 
 
 @pytest.fixture(scope="module")
-def upstream():
+def upstream(tmp_path_factory):
     subprocess.run(["docker", "info"], check=True, capture_output=True)
     name = "sb-spike-" + uuid.uuid4().hex
+    space_dir = tmp_path_factory.mktemp("real-image-space")
     subprocess.run(
         [
             "docker",
@@ -26,12 +28,16 @@ def upstream():
             "--detach",
             "--name",
             name,
+            "--mount",
+            f"type=bind,source={space_dir},target=/data",
             "-p",
             "127.0.0.1::3000",
             "-e",
             "SB_USER=spike:synthetic-browser-password",
             "-e",
             "SB_RUNTIME_API=0",
+            "-e",
+            "SB_FOLDER=/data",
             "-e",
             "SB_AUTH_TOKEN=" + TOKEN,
             IMAGE,
@@ -61,6 +67,7 @@ def upstream():
             client.startup_logs = subprocess.check_output(
                 ["docker", "logs", name], stderr=subprocess.STDOUT, text=True
             )
+            client.space_dir = space_dir
             yield client
     finally:
         subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True)
@@ -244,6 +251,85 @@ def test_real_index_and_rejected_content(upstream, tmp_path):
                 index.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "case,raw,reason",
+    [
+        ("oversized", b"x" * 65537, "page_too_large"),
+        ("invalid-utf8", b"invalid markdown: \xff\xfe\n", "invalid_markdown_encoding"),
+    ],
+    ids=["oversized", "invalid-utf8"],
+)
+def test_real_image_permanent_page_rejection(upstream, tmp_path, case, raw, reason):
+    """No fake transport: demand exact listing, bytes, ETag and production skip behavior."""
+    import asyncio
+
+    from silverbullet_memory.client import PermanentPageError, SilverBulletClient
+    from silverbullet_memory.index import MemoryIndex
+
+    note = f"Business/Rejected-{case}.md"
+    good = f"Business/Readable-{case}.md"
+    path = "/.fs/" + note
+    assert upstream.put(path, content="oldrejectedneedle").status_code == 200
+    assert upstream.put("/.fs/" + good, content="readablecorpusneedle").status_code == 200
+
+    async def run():
+        reads = []
+
+        async def record(request):
+            reads.append(request.url.path)
+
+        async with httpx.AsyncClient(event_hooks={"request": [record]}, trust_env=False) as http:
+            client = SilverBulletClient(str(upstream.base_url), TOKEN, http)
+            index = MemoryIndex(tmp_path / "rejected.sqlite")
+            try:
+                await index.sync(client)
+                assert index.status()["ready"] is True
+                assert index.get(note)["content"] == "oldrejectedneedle"
+                previous_skips = index.status()["skipped"]
+                if case == "invalid-utf8":
+                    # Upstream 2.12.1 DiskSpace reads bytes; avoid text PUT decoding entirely.
+                    target = upstream.space_dir / note
+                    temporary = target.with_name(".invalid-byte-page.tmp")
+                    temporary.write_bytes(raw)
+                    temporary.replace(target)
+                else:
+                    assert upstream.put(path, content=raw).status_code == 200
+                listed = {entry["name"]: entry for entry in await client.inventory()}
+                assert listed[note]["size"] == len(raw)
+                response = upstream.get(path)
+                assert response.status_code == 200
+                assert response.content == raw
+                assert (
+                    response.headers["etag"] == '"sha256:' + hashlib.sha256(raw).hexdigest() + '"'
+                )
+                with pytest.raises(PermanentPageError, match="^" + reason + "$"):
+                    await client.get(note)
+                reads.clear()
+                await index.sync(client)
+                assert reads.count(path) == 1
+                status = index.status()
+                assert status["ready"] is True and status["stale"] is False
+                assert status["skipped"] == previous_skips + 1
+                assert {"path": note, "reason": reason} in status["skipped_details"]
+                assert index.get(note) is None
+                assert not index.search("oldrejectedneedle")
+                assert any(row["path"] == good for row in index.search("readablecorpusneedle"))
+                for _ in range(2):
+                    reads.clear()
+                    await index.sync(client)
+                    assert path not in reads, "unchanged rejection must not be fetched again"
+                    assert index.status()["ready"] is True
+            finally:
+                index.close()
+
+    try:
+        asyncio.run(run())
+    finally:
+        # Only these synthetic fixture pages; never an operator space.
+        for relative in (note, good):
+            (upstream.space_dir / relative).unlink(missing_ok=True)
 
 
 def test_browser_execution(upstream):

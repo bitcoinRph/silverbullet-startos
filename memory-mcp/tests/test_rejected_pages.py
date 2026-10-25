@@ -20,10 +20,13 @@ class Space:
         self.fail = set()
         self.bad_etag = set()
         self.inventory_failure = False
+        self.status = None
+        self.inventories = 0
         self.on_get = lambda: None
 
     def handle(self, request):
         if request.url.path == "/.fs":
+            self.inventories += 1
             if self.inventory_failure:
                 return httpx.Response(503)
             return httpx.Response(
@@ -42,6 +45,8 @@ class Space:
         self.on_get()
         if path in self.fail:
             raise httpx.ReadTimeout("synthetic timeout")
+        if self.status is not None:
+            return httpx.Response(self.status)
         raw = self.pages[path]
         digest = "0" * 64 if path in self.bad_etag else hashlib.sha256(raw).hexdigest()
         return httpx.Response(200, content=raw, headers={"etag": '"sha256:' + digest + '"'})
@@ -58,24 +63,38 @@ async def polling(index, client, monkeypatch):
     from silverbullet_memory import server
 
     checkpoints, permits = asyncio.Queue(), asyncio.Queue()
+    clock = [0.0]
+    tasks = []
+
+    def create_task(coro):
+        task = asyncio.create_task(coro)
+        tasks.append(task)
+        return task
 
     async def sleep(seconds):
         assert seconds == 15
         await checkpoints.put(None)
         await permits.get()
 
-    monkeypatch.setattr(server, "asyncio", SimpleNamespace(**{**vars(asyncio), "sleep": sleep}))
+    monkeypatch.setattr(server, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(
+        server,
+        "asyncio",
+        SimpleNamespace(**{**vars(asyncio), "sleep": sleep, "create_task": create_task}),
+    )
     app = server.create_app(
         MemoryTools(client, index), "r" * 48, "w" * 48, ["localhost:3001"], [], poll=True
     )
     async with app.app.router.lifespan_context(app.app):
         await asyncio.wait_for(checkpoints.get(), 2)
 
-        async def advance():
+        async def advance(seconds=15):
+            clock[0] += seconds
             await permits.put(None)
             await asyncio.wait_for(checkpoints.get(), 2)
 
         yield advance
+    assert tasks and all(task.cancelled() for task in tasks), "poll task must not leak"
 
 
 @pytest.mark.parametrize(
@@ -167,6 +186,8 @@ def test_transient_failures_remain_stale_and_retry(tmp_path, monkeypatch, failur
                 space.fail.clear()
                 space.bad_etag.clear()
                 space.inventory_failure = False
+                await advance()
+                assert index.status()["stale"] is True
                 await advance()
                 assert index.status()["ready"] is True
                 assert index.get("Business/b.md")["content"] == "changed bitcoin"

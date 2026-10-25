@@ -27,6 +27,9 @@ from .tools import MemoryTools
 
 LOG = logging.getLogger("memory.audit")
 WRITES = {"memory_create", "memory_replace_text"}
+POLL_SECONDS = 15
+REBUILD_RETRY_INITIAL_SECONDS = 30
+REBUILD_RETRY_MAX_SECONDS = 15 * 60
 
 
 class Boundary:
@@ -189,7 +192,10 @@ def create_app(
     async def poll_index() -> None:
         marker = tools.index.path.parent / "rebuild-request"
         pending = marker.with_name("rebuild-in-progress")
+        retry_at = 0.0
+        retry_delay = REBUILD_RETRY_INITIAL_SECONDS
         while True:
+            rebuild = attempted = False
             try:
                 # Atomic claim: a new request published during this attempt stays
                 # at marker and is never deleted by completion of the old work.
@@ -197,13 +203,24 @@ def create_app(
                     with suppress(FileNotFoundError):
                         marker.rename(pending)
                 rebuild = os.path.lexists(pending)
-                await tools.index.sync(tools.client, rebuild=rebuild)
-                if rebuild and not tools.index.stale:
-                    pending.unlink()
+                if rebuild and time.monotonic() < retry_at:
+                    # Do not let an incremental sync clear stale while claimed work waits.
+                    tools.index.stale = True
+                else:
+                    attempted = True
+                    await tools.index.sync(tools.client, rebuild=rebuild)
+                    if rebuild and not tools.index.stale:
+                        pending.unlink()
+                        retry_at = 0.0
+                        retry_delay = REBUILD_RETRY_INITIAL_SECONDS
             except Exception:
                 tools.index.stale = True
                 LOG.warning("index_sync_failed")
-            await asyncio.sleep(15)
+            if rebuild and attempted and tools.index.stale:
+                # Process-local, measured after failure; restart may retry immediately.
+                retry_at = time.monotonic() + retry_delay
+                retry_delay = min(retry_delay * 2, REBUILD_RETRY_MAX_SECONDS)
+            await asyncio.sleep(POLL_SECONDS)
 
     @asynccontextmanager
     async def lifespan(application: Any):

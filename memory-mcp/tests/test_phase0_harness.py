@@ -92,7 +92,7 @@ def test_runtime_execution_or_unexpected_status_remains_a_blocker(
     assert calls == (2 if delayed else 1)
 
 
-def test_disposable_fixture_captures_container_logs_before_cleanup(monkeypatch):
+def test_disposable_fixture_captures_container_logs_before_cleanup(monkeypatch, tmp_path_factory):
     module = spike()
     commands = []
 
@@ -112,10 +112,16 @@ def test_disposable_fixture_captures_container_logs_before_cleanup(monkeypatch):
             **kwargs, transport=httpx.MockTransport(lambda _: httpx.Response(200, text="OK"))
         ),
     )
-    fixture = module.upstream.__wrapped__()
+    fixture = module.upstream.__wrapped__(tmp_path_factory)
     try:
         client = next(fixture)
         assert getattr(client, "startup_logs", None) == DISABLE_LOG
+        command = next(command for command in commands if command[1] == "run")
+        assert command[command.index("--mount") + 1] == (
+            f"type=bind,source={client.space_dir},target=/data"
+        )
+        assert "SB_FOLDER=/data" in command
+        assert client.space_dir.is_dir()
     finally:
         fixture.close()
     log_command = next(command for command in commands if command[1] == "logs")
