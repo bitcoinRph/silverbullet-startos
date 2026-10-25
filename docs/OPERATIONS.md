@@ -4,6 +4,12 @@ No live service installation, credential rotation, infrastructure change or rele
 publication is authorized by this branch. The PR stays draft; do not merge until
 all exact-head gates and independent review pass.
 
+This branch targets wrapper 2.12.1:2, based on merge 8f47f16bdbcd2415773740e8423a3624784fdef4.
+PR #13 (:1) was merged by the owner before final review finished. The owner's explicit
+decision permits v2.12.1_1 publication; never replace that tag/release or its assets.
+This is a fix-forward, not a retroactive acceptance of the rejected audit. Upstream
+SilverBullet remains 2.12.1. No release/merge automation is enabled by this PR.
+
 ## Enable safely (separately approved deployment)
 
 1. Verify a restorable main-volume backup, package checksum/manifest, upstream pin
@@ -15,7 +21,8 @@ all exact-head gates and independent review pass.
 4. For opt-in, run Enable Agent Memory API. Set exact Host headers seen through the
    private StartOS proxy (including mapped port), plus exact http(s) browser origins
    or leave origins empty. Never use wildcard host/origin values. This action enables
-   the API and restarts the package; do not invoke it without operator approval.
+   the API and restarts main; its reactive interface dependency independently
+   exports MCP without reboot/update. Do not invoke it without operator approval.
 5. Use Get MCP Credentials, which masks external read/read-write tokens and resolves
    current non-local MCP URLs using the SDK interface API. If no URL is available,
    inspect the StartOS Interfaces tab; append /mcp only once. Never fabricate a proxy
@@ -25,28 +32,49 @@ all exact-head gates and independent review pass.
    Test wrong/missing/query tokens and read-token writes, Host and Origin errors,
    status/body health checks and index lag through the REAL proxy, not just loopback.
 7. Keep actual mutations disabled. Current six-tool API cannot create or replace
-   canonical content. Create previews are not a committed result.
+   canonical content. Create previews are not a committed result. tools/list describes
+   every tool; both mutation descriptions explicitly say preview/fail-closed only,
+   writes disabled in v1. Non-dry-run calls fail with MCP isError=true and writes_disabled.
+   Replacement fails before managed-prefix checks; dry-run still enforces that policy.
 
 Enable/disable and both rotation actions restart the package and invalidate active
 requests. External rotation leaves login/internal token intact; internal rotation
 leaves login/external tokens intact. Serialize operator actions: cross-RPC action
 concurrency has not been proven. Disabling removes bearer auth, daemon and interface.
+Token-only rotations leave the exported interface intact. The package harness drives
+actual enable/disable/rotate/credentials actions with the pinned SDK's FileHelper
+watcher and context retry. It never manually reruns setInterfaces after an action.
+On a disposable StartOS node, verify interface appearance/removal and fresh masked
+credentials after rotation, without reboot/update; source tests are not that live gate.
 Missing/corrupt API state leaves SilverBullet running but MCP closed with a critical
 task. Recover a known-good agent-api.json backup; do not delete store.json.
 
 ## Index, backup and downgrade
 
 Use Rebuild Memory Index to request a new validated derived index on the next poll.
-No delete/reindex MCP tool exists. A failed read retains its old entry and marks stale;
-readiness becomes HTTP 503. A failed rebuild retains the previous DB. Review the
-safe process/audit logs and credential/loopback/auth status without printing secrets.
+No delete/reindex MCP tool exists. Pages over 64 KiB or with invalid UTF-8 are
+permanently skipped, reported by memory_status as skipped plus up to ten path/reason
+details. Their previous indexed text is removed, including during a failed rebuild;
+they do not keep the readable corpus stale or readiness false. Unchanged skips are
+cached in the disposable DB across process restarts and retried on a changed inventory
+stamp or explicit rebuild. Counts include all skips; details deliberately truncate.
+Transient inventory/network/inconsistent SHA-256 ETag failures still mark stale,
+return readiness HTTP 503 and retain retry behavior. Unknown errors fail closed.
+
+The action publishes a complete rebuild-request with temp-file/fsync/rename; the
+poller atomically renames it to rebuild-in-progress. Completed work (including skipped
+pages) removes only that claimed marker. A new concurrent request survives at its
+original path for the next poll. Transient failed rebuilds retain the previous DB
+(except permanently rejected old text) and claimed work for retry. A completed rebuild
+does not full-refetch unchanged pages on the next poll or restart. Review safe logs
+and credential/loopback/auth status without printing secrets.
 
 Backup main: canonical main/space, store.json and agent-api.json. Never back up the
 live derived index as canonical memory. It rebuilds after restore. Test password
 byte-identity during install/update/restore/rebuild/enable/disable/rotations with a
 disposable StartOS node before production adoption.
 
-The :1 -> :0 migration is intentionally a no-op: :0 ignores the extra state and index.
+The :2 -> :1 -> :0 migrations are intentionally no-ops: :0 ignores the extra state and index.
 Source tests prove the migration graph reaches :0 without mutating the files; actual
 StartOS downgrade acceptance and retained-volume behavior remain unverified. If
 StartOS refuses it, STOP and obtain approval for uninstall-and-restore from the
@@ -79,26 +107,50 @@ must fail, not skip, if Docker/browser prerequisites are missing when enabled. L
 runs explicitly skip it without the opt-in. Local Docker is unavailable. Unit fake
 HTTP/corpus tests are not real-image evidence. Build both package architectures and
 universal; inspect with start-cli s9pk inspect FILE manifest --format json. Verify
-2.12.1:1, image set/architectures, non-root runtime, interface declarations, checksum,
+2.12.1:2, image set/architectures, non-root runtime, interface declarations, checksum,
 source gitHash and absence of node_modules in the MCP image. CI is the artifact gate.
 
-## Mandatory unverified gates before merge/deploy
+## Required exact-head CI and review before merge
 
-- Default-image Runtime API reproduction; disabled Runtime behavior with/without bearer.
-- Exact-image bearer CRUD/conditional ETag semantics and hidden paths.
-- Real browser malicious-page boot reproduction, accepted/rejected content execution,
-  and unsaved human-editor concurrency/reconciliation (no silent reversion).
-- StartOS same-package loopback, actual proxy Host/Origin, sidecar lifecycle/task visibility,
-  secret masking, volume ownership, upgrade/restore and accepted no-op downgrade.
-- Both architecture images/packages, universal package, package metadata/signatures and
-  actual arm64 runtime. Wheel availability alone is not a successful image build.
-- Real Hermes plugin discovery/activation in a disposable profile; never install into
-  existing profiles as an implementation shortcut. Host ABI harness is not this gate.
-- Independent exact-diff Opus high-effort audit and all required exact-head CI checks.
-- Baseline npm audit reports two high findings through SDK 1.5.3's Zod collection
-  validator (GHSA-mrhx-c7xc-m3w5). Do not call the dependency scan clean. A major SDK
-  upgrade is outside this wrapper slice; assess StartOS action/config exposure and
-  resolve or explicitly accept this before merge. Python audit is a separate result.
+- Source/protocol/package-contract tests, lint/type/build and dependency scans on :2.
+- Re-run exact-image bearer/read/conditional ETag, hidden-path, Runtime-disabled
+  rejection and browser execution/concurrency checks on the final :2 SHA. The :1
+  review accepted prior CI metadata; that is not final-SHA :2 execution evidence.
+- Build both architecture packages and inspect their version/metadata/checksums.
+  The universal package remains a separately authorized release-build gate.
+- Independent exact-diff Opus high-effort audit and all required exact-head CI checks;
+  local coder verification does not substitute for that final review.
+
+## Remaining separately approved live deployment gates
+
+- StartOS same-package loopback, actual proxy Host/Origin, dynamic interface lifecycle,
+  sidecar/task visibility, masked fresh credentials, volume ownership and backup/restore.
+- Upgrade/downgrade acceptance with canonical notes and login byte-preserved.
+- Final package signatures/source gitHash, universal package and actual arm64 runtime.
+  Wheel availability and cross-architecture image packing are not native runtime proof.
+- Real Hermes discovery/activation in a disposable profile. Never install into existing
+  profiles as an implementation shortcut; the host ABI harness is not this live gate.
+
+## Explicit scoped dependency risk acceptance
+
+For this requested 2.12.1:2 fix-forward, retain and explicitly accept the pre-existing
+GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) HIGH advisory through Start SDK 1.5.3/Zod.
+The SDK and npm lockfile are unchanged from :1. npm audit reports two HIGH findings
+(Zod plus its SDK dependency chain), not a clean scan. This is a scoped acceptance,
+not a patched-vulnerability claim or authorization to expand input reachability.
+
+Exposure basis: Node Zod here handles only StartOS-admin action input and package-written
+agent-api.json. Enable caps host/origin arrays at 16 and validates exact hosts/origins
+before passing them to state validation; package-written arrays are bounded, and the
+state schema also caps both arrays at 16. These are trusted administrator/configuration
+surfaces, not untrusted network payloads. No network-reachable MCP path invokes Node
+Zod: the sidecar is Python with its existing byte/depth/element/auth/Host/Origin bounds.
+Administrator-controlled malformed state and SDK-internal parsing remain residual
+availability risks; schema .max alone must not be described as a universal early-abort
+mitigation. Reassess before adding input arrays, exposing Node validation remotely or
+upgrading the SDK. A major SDK/Zod migration is outside this surgical release.
+Advisory: https://github.com/advisories/GHSA-mrhx-c7xc-m3w5.
+Python pip-audit is a separate scan; do not infer its result from npm audit.
 
 Any real-image gate disproving conditional writes or content safety keeps the service
 read-only. Silent browser reversion would prohibit replacement (create-only maximum).

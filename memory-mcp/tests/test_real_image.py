@@ -159,7 +159,9 @@ def test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(upstream, t
                 note = path.removeprefix("/.fs/")
                 before = await client.get(note)
                 assert before["content"] == server_text
-                assert (
+                from mcp.server.fastmcp.exceptions import ToolError
+
+                with pytest.raises(ToolError, match="^writes_disabled$"):
                     tools.memory_create(
                         "Inbox/BlockedConcurrency.md",
                         "Safe but blocked",
@@ -171,13 +173,9 @@ def test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(upstream, t
                         },
                         "concurrency-gate",
                         dry_run=False,
-                    )["error"]
-                    == "writes_disabled"
-                )
+                    )
                 assert await client.get(note) == before
-                # Raw '<' in conflict markers fails content validation before
-                # the writes_disabled release-policy response; writes stay off.
-                with pytest.raises(ValueError, match="^executable_content_not_allowed$"):
+                with pytest.raises(ToolError, match="^writes_disabled$"):
                     await tools.memory_replace_text(
                         note,
                         before["etag"],
@@ -185,6 +183,16 @@ def test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(upstream, t
                         "mcp-must-not-write",
                         "Verify concurrency stop condition",
                         dry_run=False,
+                    )
+                # Dry-run still validates raw '<' conflict markers; it cannot write.
+                with pytest.raises(ValueError, match="^executable_content_not_allowed$"):
+                    await tools.memory_replace_text(
+                        note,
+                        before["etag"],
+                        "agent-conditional-change",
+                        "mcp-must-not-write",
+                        "Verify concurrency stop condition",
+                        dry_run=True,
                     )
                 assert await client.get(note) == before
                 assert upstream.get(path).content == server_bytes
@@ -217,7 +225,9 @@ def test_real_index_and_rejected_content(upstream, tmp_path):
                 tools = MemoryTools(client, index)
                 assert tools.memory_search("bitcoin")
                 assert (await tools.memory_get("Business/AcceptedSpike.md"))["untrusted_content"]
-                assert (
+                from mcp.server.fastmcp.exceptions import ToolError
+
+                with pytest.raises(ToolError, match="^writes_disabled$"):
                     tools.memory_create(
                         "Inbox/Preview.md",
                         "Safe preview",
@@ -229,9 +239,7 @@ def test_real_index_and_rejected_content(upstream, tmp_path):
                         },
                         "real-spike",
                         dry_run=False,
-                    )["error"]
-                    == "writes_disabled"
-                )
+                    )
             finally:
                 index.close()
 

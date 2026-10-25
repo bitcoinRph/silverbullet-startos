@@ -4,17 +4,22 @@
 
 # SilverBullet Business Memory on StartOS
 
-Wrapper `2.12.1:1` keeps upstream `2.12.1` and adds an opt-in, authenticated
+Wrapper `2.12.1:2` keeps upstream `2.12.1` and fixes the opt-in, authenticated
 Streamable HTTP MCP daemon with a disposable SQLite FTS5 index. The Agent API is
 disabled by default: no extra daemon, interface or `SB_AUTH_TOKEN`. The experimental
 Runtime API is now unconditionally disabled (`SB_RUNTIME_API=0`), including when
 MCP is enabled. This is an intentional change from the previous wrapper.
 
-Safety downgrade: actual MCP mutations are hard-disabled pending real-image
-executable-content and browser-concurrency evidence. The six tools are
+This is the fix-forward for `:1`: PR #13 merged before final review completed.
+`v2.12.1_1` is allowed to publish by the owner's decision; its assets are immutable.
+This revision does not replace them or authorize merge, release or deployment.
+
+Actual MCP mutations remain hard-disabled in v1. The six described tools are
 `memory_status`, `memory_search`, `memory_get`, `memory_backlinks`, `memory_create`
 and `memory_replace_text`; create provides validated previews, replacement has no
-operator-managed prefixes in this release. No environment flag bypasses this gate.
+operator-managed prefixes in this release. Non-dry-run attempts return an actual
+MCP tool error (`isError: true`, `writes_disabled`), not successful error-shaped JSON.
+No environment flag bypasses this policy.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Operations](docs/OPERATIONS.md) for
 the security model, exact tool contracts, operational actions and unverified gates.
@@ -142,6 +147,10 @@ Agent actions: Enable/Disable Agent Memory API, Get MCP Credentials (external to
 masked), Rotate MCP Tokens, Rotate Internal API Token, Rebuild Memory Index. Enable
 requires exact private proxy Host and Origin allowlists; browser origins default
 to none. Enable/disable/rotations restart only when invoked by an operator.
+The MCP interface also reacts to the atomic opt-in state through the pinned SDK's
+`.const(effects)` dependency, without a reboot/update. Token-only rotation does not
+recreate the interface. Action-driven lifecycle tests cover this; real StartOS proxy
+and lifecycle verification remain deployment gates.
 
 ---
 
@@ -163,6 +172,12 @@ your notes and existing credentials are preserved.
 | ------------- | --------------------- | ------------------------------------------------------------------------------- |
 | Web Interface | Bounded `/.ping`, HTTP 200 and body `OK` | Fails on other statuses or bodies |
 | Memory index | `/health/ready`, HTTP 200 and `ready: true` | HTTP 503 until a full authenticated sync; stale syncs are not ready |
+
+Pages exceeding 64 KiB or containing invalid UTF-8 are skipped, not an index-wide
+outage. `memory_status` reports `skipped` and at most ten path/reason details.
+Previously indexed text is removed when a page is permanently rejected. Unchanged
+skips are cached across restart; changed pages are retried. Transient inventory,
+network and inconsistent ETag failures still make readiness false and retry.
 
 ---
 

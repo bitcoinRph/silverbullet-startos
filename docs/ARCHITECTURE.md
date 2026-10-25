@@ -1,6 +1,6 @@
 # Business Memory architecture and v1 security decision
 
-Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:1 adds a
+Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:2 fixes the
 same-package sidecar using documented StartOS SDK 1.5.3 loopback/dependency patterns.
 The image context is memory-mcp/, not the repository root. Both images declare
 x86_64 and aarch64. Actual image/package execution is an independent CI gate.
@@ -21,9 +21,9 @@ x86_64 and aarch64. Actual image/package execution is an independent CI gate.
 
 ## Read-only release downgrade (binding audit stop condition)
 
-The exact-image/browser executable-content and unsaved-editor concurrency spikes
-cannot run locally without Docker. Therefore actual mutations are hard-disabled,
-including for write-token callers. The upstream client has no PUT or DELETE methods;
+Actual mutations remain hard-disabled by v1 policy, including for write-token callers.
+Exact-image/browser and unsaved-editor concurrency checks must run on the final SHA
+in CI. The upstream client has no PUT or DELETE methods;
 no runtime configuration can turn mutations on. This is a deliberate v1 read-only
 release, not a claim that the original full-write plan is complete.
 
@@ -31,7 +31,11 @@ The six tools remain exactly memory_status, memory_search, memory_get,
 memory_backlinks, memory_create and memory_replace_text. The write scope permits
 create previews. Replacement is refused by default (empty managed-prefix tuple);
 its exact-single-match/ETag/content preview implementation is exercised with an
-explicit synthetic prefix in unit tests. A non-dry-run call returns writes_disabled.
+explicit synthetic prefix in unit tests. Every tool has an agent-readable description.
+Both mutation descriptions explicitly say preview/fail-closed only and writes disabled
+in v1. A non-dry-run call raises a FastMCP ToolError with writes_disabled, conveyed as
+MCP isError=true. Replacement checks this before path/managed-prefix checks or reads;
+dry-run still validates the existing managed-prefix policy and cannot write.
 There is no Runtime API, fetch URL, SQL, Lua, shell, reindex or delete tool.
 
 Create paths must be Markdown in Inbox/ or Sources/. The effective target is
@@ -68,7 +72,10 @@ complete business-level audit trail. Uvicorn access logging is disabled.
 
 Upstream reads are streaming and capped at 64 KiB per note and 8 MiB/50,000 listing
 entries, 10-second operation timeouts, redirects disabled. No server-side URL fetch.
-Outsize notes make the index stale rather than silently current. Search is bounded
+Oversized pages and invalid UTF-8 are permanent per-page rejections: skip them and
+report a bounded status summary, without disabling readiness for readable pages.
+An inconsistent SHA-256 ETag stays transient, not skipped: it can reflect a concurrent
+or inconsistent upstream response, and must be retried. Search is bounded
 20 results, 500 escaped characters each; get is capped at 16,000 characters. Index
 metadata parsing deliberately supports flat v1 scalars and inline tags, not all YAML.
 
@@ -80,11 +87,22 @@ not support read-only-rootfs or package CPU/memory controls; no such claim is ma
 
 A dedicated excluded-from-backup index volume holds SQLite FTS5/WAL with a busy
  timeout and schema version. Poll inventory every 15 seconds; fetch changed Markdown
-only. Keep a failed read's previous entry and mark stale. Reconcile deletion only
+only. Keep a transient failed read's previous entry and mark stale. Reconcile deletion only
 from a successful complete inventory. Check integrity on open and rebuild corruption.
-Operator rebuilds use a marker; rebuild writes a temporary DB, validates/checkpoints,
+Permanent rejections delete previously indexed content immediately (including during
+a later failed rebuild); persisted path/stamp/reason records avoid refetching unchanged
+rejected pages. They are retried on stamp change or explicit rebuild and removed on
+deletion. memory_status reports the total skipped count and at most ten path/reason
+details (512 characters per path), never page bodies. Unknown exceptions fail closed.
+Operator actions publish rebuild-request using temp-file/fsync/rename. The poller
+atomically claims it as rebuild-in-progress; a concurrent new request remains untouched.
+Transient failures retain claimed work for retry. A completed rebuild, including
+permanent skips, removes only the claimed marker; restart cannot replay consumed work.
+A rebuild writes a temporary DB, validates/checkpoints,
 then atomically replaces the derived DB. No canonical data or durable idempotency
 state is held here. Readiness is false after every process start until a full sync.
+Once ready, the prior index stays available during inventory/read waits on normal
+polls and rebuilds; only a known transient/unknown failure marks it stale.
 
 Lexical BM25 weights title/headings 5, tags 3, body 1 with canonical-path tie-break.
 Filters run before LIMIT; backlinks are a bounded derived wikilink index. There are
@@ -99,9 +117,33 @@ RPC-process actions are NOT a proven distributed lock. Administrators must seria
 configuration/rotation actions. Corrupt state fails MCP closed but does not block the
 SilverBullet daemon; critical recovery tasks contain no secret material.
 
-No canonical schema changes. :1 includes a no-op down migration to :0, tested at
+No canonical schema changes. :2 includes a no-op down migration to :1, retaining
+the historical no-op :1 -> :0 path, tested at
 function/VersionGraph level. Actual StartOS upgrade/downgrade and treatment of the
 extra index volume still require disposable StartOS evidence, not just unit tests.
+
+## Interface lifecycle and Hermes recall
+
+SDK 1.5.3 Effects.restart restarts main only. setupInterfaces therefore reads a
+FileHelper.string view of agent-api.json mapped to the validated enabled flag with
+.const(effects). Only flag changes re-export interfaces; malformed state maps to
+disabled, and the unrelated UI remains exported. Atomic token rotations do not change
+that dependency. The harness drives the actual actions and observes pinned SDK file
+watching/context retries/exports, not a manual setInterfaces call after each action.
+Official contract: https://docs.start9.com/packaging/0.4.0.x/interfaces.html.
+
+The independent Hermes provider follows the official MemoryProvider contract:
+queue_prefetch runs after turn N using its user query; prefetch consumes it for N+1,
+whose query normally differs. Verified in official Hermes source at
+8084684936a951e6c539675f8f81e5b5c35b866f (agent/memory_provider.py:138-144,
+agent/turn_context.py:929, run_agent.py:922). The cache is session-scoped, latest
+generation, one-shot, expires 30 minutes after fetch completion, and is invalidated on initialization
+and shutdown. One background worker plus one coalesced pending request bounds work;
+superseded results cannot publish. Re-queuing the same completed query replaces the
+payload and timestamp. No-network is_available and no write hooks remain.
+Recall is explicitly previous-turn context, not a claim of relevance to a new topic;
+MCP search remains the current-query retrieval path. JSON-quoted bounded snippets
+cannot break the untrusted-content fence. See integrations/hermes/README.md.
 
 Primary contracts: upstream 2.12.1 docs/HTTP API.md, docs/Space Lua.md,
 docs/Runtime API.md; docs.start9.com/packaging/0.4.0.x main/manifest/versions;

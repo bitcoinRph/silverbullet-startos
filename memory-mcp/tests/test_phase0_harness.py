@@ -208,23 +208,26 @@ def test_conflict_preservation_characterization_exercises_both_disabled_mcp_writ
     )
     from silverbullet_memory.tools import MemoryTools
 
+    from mcp.server.fastmcp.exceptions import ToolError
+
     invoked = []
     create = MemoryTools.memory_create
     replace = MemoryTools.memory_replace_text
 
     def checked_create(self, *args, **kwargs):
         assert kwargs["dry_run"] is False
-        result = create(self, *args, **kwargs)
-        invoked.append(("create", result["error"]))
-        return result
+        try:
+            return create(self, *args, **kwargs)
+        except ToolError as exc:
+            invoked.append(("create", str(exc)))
+            raise
 
     async def checked_replace(self, *args, **kwargs):
-        assert kwargs["dry_run"] is False
         try:
             return await replace(self, *args, **kwargs)
-        except ValueError as exc:
-            # Conflict markers hit the content validator before writes_disabled.
-            invoked.append(("replace", str(exc)))
+        except (ToolError, ValueError) as exc:
+            label = "replace-preview" if kwargs["dry_run"] else "replace"
+            invoked.append((label, str(exc)))
             raise
 
     monkeypatch.setattr(MemoryTools, "memory_create", checked_create)
@@ -235,7 +238,8 @@ def test_conflict_preservation_characterization_exercises_both_disabled_mcp_writ
         module.test_upstream_conflict_preservation_keeps_mcp_mutations_disabled(client, tmp_path)
     assert invoked == [
         ("create", "writes_disabled"),
-        ("replace", "executable_content_not_allowed"),
+        ("replace", "writes_disabled"),
+        ("replace-preview", "executable_content_not_allowed"),
     ]
     assert [method for method, _ in requests if method != "GET"] == ["PUT", "PUT"]
     assert "agent-conditional-change" in text

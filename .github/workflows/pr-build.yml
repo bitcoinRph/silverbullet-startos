@@ -114,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           start-cli s9pk inspect "silverbullet_${ARCH}.s9pk" manifest --format json > "manifest-${ARCH}.json"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=json.dumps(d); assert "2.12.1:1" in s; assert "memory-mcp" in s; assert "silverbullet" in s; assert "index" in s' "manifest-${ARCH}.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=json.dumps(d); assert "2.12.1:2" in s; assert "memory-mcp" in s; assert "silverbullet" in s; assert "index" in s' "manifest-${ARCH}.json"
           git rev-parse HEAD > "source-${ARCH}.txt"
 
       - name: Upload package and checksum

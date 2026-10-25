@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
-import { utils, z } from '@start9labs/start-sdk'
+import { FileHelper, utils, z } from '@start9labs/start-sdk'
 import { storeJson } from './store.json'
 
 const token = z.string().regex(/^[A-Za-z0-9]{48}$/)
@@ -58,6 +58,17 @@ export const agentApi = {
   // Same main-volume root as store.json, never within the served space.
   get path() {
     return path.join(path.dirname(storeJson.path), 'agent-api.json')
+  },
+  enabled() {
+    // Observe only the opt-in flag. Atomic token rotation must not re-export interfaces.
+    // A malformed state is disabled without putting credential-bearing parse errors in logs.
+    return FileHelper.string(this.path).read((raw) => {
+      try {
+        return shape.parse(JSON.parse(raw)).enabled
+      } catch {
+        return false
+      }
+    })
   },
   async read(): Promise<AgentApiState> {
     try {

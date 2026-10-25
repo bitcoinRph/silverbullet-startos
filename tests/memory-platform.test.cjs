@@ -87,10 +87,11 @@ test('failed atomic write leaves existing state intact and removes temporary fil
   assert.deepEqual(await fs.readFile(agentApi.path), before)
   assert.deepEqual((await fs.readdir(root)).sort(), ['agent-api.json', 'store.json'])
 })
-test('wrapper :1 downgrade to :0 is a no-op with credential files byte-preserved', async () => {
+test('wrapper :2 downgrade through :1 to :0 is a no-op with credential files byte-preserved', async () => {
   const { agentApi } = await fixture()
   const versions = require('../startos/versions/current.ts')
-  assert.equal(versions.current.options.version, '2.12.1:1')
+  assert.equal(versions.current.options.version, '2.12.1:2')
+  assert.equal(versions.v2_12_1_1.options.version, '2.12.1:1')
   assert.equal(versions.v2_12_1_0.options.version, '2.12.1:0')
   const before = await fs.readFile(storeJson.path)
   const apiBefore = await fs.readFile(agentApi.path)
@@ -101,7 +102,7 @@ test('wrapper :1 downgrade to :0 is a no-op with credential files byte-preserved
   const migrated = []
   await versionGraph.migrate({
     effects: { setDataVersion: async value => { migrated.push(value.version); return null } },
-    from: ExtendedVersion.parse('2.12.1:1'), to: ExtendedVersion.parse('2.12.1:0'),
+    from: ExtendedVersion.parse('2.12.1:2'), to: ExtendedVersion.parse('2.12.1:0'),
   })
   assert.equal(migrated.at(-1), '2.12.1:0')
   assert.deepEqual(await fs.readFile(storeJson.path), before)
@@ -158,4 +159,31 @@ test('interface export is conditional and uses a masked API path', async () => {
   assert.equal(interfaces[1].masked, true)
   assert.equal(interfaces[1].type, 'api')
   assert.equal(interfaces[1].path, '/mcp')
+})
+
+test('rebuild action publishes a complete marker atomically without truncating an in-flight request', async () => {
+  await fixture()
+  const { actions } = require('../startos/actions/index.ts')
+  const marker = path.join(root, 'rebuild-request')
+  await fs.writeFile(marker, 'existing request')
+  const originalRename = fs.rename
+  let published = false
+  fs.rename = async (source, target) => {
+    assert.equal(target, marker)
+    assert.notEqual(source, marker)
+    assert.equal(await fs.readFile(marker, 'utf8'), 'existing request')
+    assert.ok((await fs.readFile(source, 'utf8')).length > 0)
+    published = true
+    return originalRename(source, target)
+  }
+  try {
+    const action = actions.get('rebuild-memory-index')
+    await action.getInput({ effects, prefill: null })
+    await action.run({ effects, input: {} })
+    assert.ok(published, 'request must be published by atomic rename')
+    assert.notEqual(await fs.readFile(marker, 'utf8'), 'existing request')
+    assert.ok(!(await fs.readdir(root)).some(name => name.endsWith('.tmp')))
+  } finally {
+    fs.rename = originalRename
+  }
 })
