@@ -18,7 +18,7 @@ export const manifest = setupManifest({
     },
     'memory-mcp': {
       source: {
-        dockerBuild: { dockerfile: 'Dockerfile', workdir: 'memory-mcp' },
+        dockerBuild: { dockerfile: 'memory-mcp/Dockerfile', workdir: 'memory-mcp' },
       },
       arch: ['x86_64', 'aarch64'],
     },

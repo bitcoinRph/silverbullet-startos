@@ -69,10 +69,11 @@ def test_runtime_disabled(upstream):
             r = upstream.post(endpoint, headers={"Authorization": auth}, content="1 + 1")
             # Primary 2.12.1 Runtime API docs also specify an exact 503-disabled
             # response. A generic 503 or browser failure is NOT a passing gate.
-            disabled = (
-                r.status_code == 503 and r.json().get("error") == "Runtime API is not enabled"
-            )
-            assert r.status_code in (403, 404) or disabled, (endpoint, r.status_code)
+            if not auth:
+                assert r.status_code == 401, (endpoint, r.status_code)
+            else:
+                assert r.status_code == 503, (endpoint, r.status_code)
+                assert r.json().get("error") == "Runtime API is not enabled"
 
 
 def test_conditional_writes(upstream):
@@ -88,6 +89,10 @@ def test_conditional_writes(upstream):
     assert upstream.get("/.fs").status_code == 200
 
 
+def _page_url(upstream, page):
+    return str(upstream.base_url.join("/" + page))
+
+
 def test_browser_unsaved_editor_concurrency(upstream):
     from playwright.sync_api import sync_playwright
 
@@ -97,7 +102,7 @@ def test_browser_unsaved_editor_concurrency(upstream):
         browser = pw.chromium.launch()
         try:
             page = browser.new_page()
-            page.goto(str(upstream.base_url) + "Inbox/ConcurrencySpike")
+            page.goto(_page_url(upstream, "Inbox/ConcurrencySpike"))
             page.locator('input[name="username"]').fill("spike")
             page.locator('input[name="password"]').fill("synthetic-browser-password")
             page.locator('button[type="submit"]').click()
