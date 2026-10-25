@@ -116,8 +116,15 @@ class MemoryIndex:
         }
 
     async def sync(self, client: Any, *, rebuild: bool = False) -> None:
-        # Unknown failures must never leave a previously ready index marked current.
-        self.stale = True
+        # Keep the previous valid index available until a failure is known.
+        try:
+            await self._sync(client, rebuild=rebuild)
+        except BaseException:
+            # Unknown errors and cancellation must also fail closed for direct callers.
+            self.stale = True
+            raise
+
+    async def _sync(self, client: Any, *, rebuild: bool = False) -> None:
         try:
             inventory = await client.inventory()
         except UpstreamError:
@@ -165,6 +172,7 @@ class MemoryIndex:
                         "INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (path, stamp, str(error))
                     )
             except (UpstreamError, ValueError):
+                self.stale = True
                 failed = True
                 if path in existing:
                     rows[path] = existing[path]

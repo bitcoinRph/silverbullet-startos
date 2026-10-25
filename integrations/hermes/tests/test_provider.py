@@ -105,7 +105,7 @@ def test_cache_expiry_refreshes_same_query(provider, monkeypatch):
     obj.initialize("session", hermes_home=str(home))
     obj.queue_prefetch("same")
     obj._worker.join(timeout=2)
-    clock[0] = 30.0
+    clock[0] = 1810.0  # Exactly 30 minutes after the queued result.
     obj.prefetch("same")
     obj._worker.join(timeout=2)
     assert calls == ["same", "same"]
@@ -159,9 +159,16 @@ def test_bounded_background_prefetch_fail_soft_no_writes(provider, monkeypatch):
     obj.shutdown()
 
 
-def test_next_turn_changed_query_consumes_latest_recall_once(provider, monkeypatch):
+@pytest.mark.parametrize("human_gap", [60, 1799])
+def test_next_turn_changed_query_consumes_latest_recall_once(
+    provider, monkeypatch, human_gap
+):
     obj, module, home = provider
     calls = []
+    clock = [10.0]
+    monkeypatch.setattr(
+        module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
     monkeypatch.setattr(
         module.MemoryClient,
         "search",
@@ -179,10 +186,49 @@ def test_next_turn_changed_query_consumes_latest_recall_once(provider, monkeypat
     # Actual host order: queue turn N's query after completion, prefetch turn N+1's NEW query.
     obj.queue_prefetch("bitcoin decision", session_id="session")
     obj._worker.join(timeout=2)
+    assert not obj._worker.is_alive()
+    clock[0] += human_gap
     result = obj.prefetch("what are the next steps?", session_id="session")
     assert "Business/decision.md" in result
+    assert result.startswith("<silverbullet_untrusted_data>\nUNTRUSTED")
+    assert result.endswith("\n</silverbullet_untrusted_data>")
+    assert result.count("</silverbullet_untrusted_data>") == 1
+    assert len(result) <= 4000
     assert calls == ["bitcoin decision"]
     assert obj.prefetch("an unrelated new topic", session_id="session") == ""
+    obj._worker.join(timeout=2)
+    obj.shutdown()
+
+
+def test_requeued_same_query_replaces_payload_and_refreshes_expiry(
+    provider, monkeypatch
+):
+    obj, module, home = provider
+    clock = [10.0]
+    calls = []
+    monkeypatch.setattr(
+        module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
+
+    def search(self, query):
+        calls.append(query)
+        return [{"path": "Business/decision.md", "snippet": f"revision-{len(calls)}"}]
+
+    monkeypatch.setattr(module.MemoryClient, "search", search)
+    obj.initialize("session", hermes_home=str(home))
+    obj.queue_prefetch("same", session_id="session")
+    obj._worker.join(timeout=2)
+    assert not obj._worker.is_alive()
+    clock[0] += 10  # Requeue while the original cache is still unexpired.
+    obj.queue_prefetch("same", session_id="session")
+    obj._worker.join(timeout=2)
+    assert not obj._worker.is_alive()
+    assert calls == ["same", "same"]
+    clock[0] += 1799  # Original timestamp is expired; replacement is not.
+    result = obj.prefetch("different next-turn query", session_id="session")
+    assert "revision-2" in result and "revision-1" not in result
+    assert result.count("Business/decision.md") == 1
+    assert obj.prefetch("another next-turn query", session_id="session") == ""
     obj._worker.join(timeout=2)
     obj.shutdown()
 
@@ -249,7 +295,7 @@ def test_expired_cache_is_not_injected_after_query_change(provider, monkeypatch)
     obj.initialize("session", hermes_home=str(home))
     obj.queue_prefetch("old")
     obj._worker.join(timeout=2)
-    clock[0] = 30.0
+    clock[0] = 1810.0  # Expiry still applies even when the next query changes.
     assert obj.prefetch("new") == ""
     obj._worker.join(timeout=2)
     assert "Business/new.md" in obj.prefetch("next")

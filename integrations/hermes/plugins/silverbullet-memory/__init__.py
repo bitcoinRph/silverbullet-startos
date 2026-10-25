@@ -15,6 +15,10 @@ from utils import atomic_json_write, read_json_or_empty
 from .client import MemoryClient
 
 
+# Turn N completes before the human replies on N+1; allow a 30-minute reading gap.
+RECALL_TTL_SECONDS = 30 * 60
+
+
 class SilverBulletMemoryProvider(MemoryProvider):
     def __init__(self):
         self._client = None
@@ -116,12 +120,6 @@ class SilverBulletMemoryProvider(MemoryProvider):
                 or not self._client
                 or not query.strip()
                 or self._request == (query, scope)
-                or (
-                    self._cache
-                    and self._cache[0] == query
-                    and self._cache[1] == scope
-                    and time.monotonic() - self._cache[3] < 15
-                )
             ):
                 return
             self._generation += 1
@@ -189,7 +187,7 @@ class SilverBulletMemoryProvider(MemoryProvider):
                 self._cache
                 and self._cache[1] == scope
                 and self._cache[4] == self._generation
-                and time.monotonic() - self._cache[3] < 15
+                and time.monotonic() - self._cache[3] < RECALL_TTL_SECONDS
             ):
                 result = self._cache[2]
                 self._cache = None  # Host queues turn N; consume once on N+1, not by query equality.

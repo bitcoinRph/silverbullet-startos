@@ -28,7 +28,9 @@ have no recall. One worker plus one coalesced latest pending request makes bound
 search (with protocol initialization), excludes Inbox/Sources before top-k, and caps
 injected output at 4,000 characters including the explicit untrusted-data fence.
 Snippets and paths are JSON-quoted with escaped fence delimiters/newlines. Additional client-side filtering is defense in
-depth. Cached recall expires after 15 seconds; stale-index results and search failures
+depth. Cached recall expires after 30 minutes from fetch completion to allow human-paced
+replies; re-queuing the same completed query replaces its payload and expiry timestamp.
+Stale-index results and search failures
 yield a safe degraded marker without exception contents.
 New generations invalidate old cached/in-flight results; session changes cannot read
 another session's cache. Initialization and shutdown discard recall and invalidate

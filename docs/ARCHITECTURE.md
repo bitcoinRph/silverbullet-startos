@@ -101,6 +101,8 @@ permanent skips, removes only the claimed marker; restart cannot replay consumed
 A rebuild writes a temporary DB, validates/checkpoints,
 then atomically replaces the derived DB. No canonical data or durable idempotency
 state is held here. Readiness is false after every process start until a full sync.
+Once ready, the prior index stays available during inventory/read waits on normal
+polls and rebuilds; only a known transient/unknown failure marks it stale.
 
 Lexical BM25 weights title/headings 5, tags 3, body 1 with canonical-path tie-break.
 Filters run before LIMIT; backlinks are a bounded derived wikilink index. There are
@@ -135,9 +137,10 @@ queue_prefetch runs after turn N using its user query; prefetch consumes it for 
 whose query normally differs. Verified in official Hermes source at
 8084684936a951e6c539675f8f81e5b5c35b866f (agent/memory_provider.py:138-144,
 agent/turn_context.py:929, run_agent.py:922). The cache is session-scoped, latest
-generation, one-shot, expires after 15 seconds, and is invalidated on initialization
+generation, one-shot, expires 30 minutes after fetch completion, and is invalidated on initialization
 and shutdown. One background worker plus one coalesced pending request bounds work;
-superseded results cannot publish. No-network is_available and no write hooks remain.
+superseded results cannot publish. Re-queuing the same completed query replaces the
+payload and timestamp. No-network is_available and no write hooks remain.
 Recall is explicitly previous-turn context, not a claim of relevance to a new topic;
 MCP search remains the current-query retrieval path. JSON-quoted bounded snippets
 cannot break the untrusted-content fence. See integrations/hermes/README.md.
