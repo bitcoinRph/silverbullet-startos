@@ -136,6 +136,9 @@ source gitHash and absence of node_modules in the MCP image. CI is the artifact 
 Exact-image permanent-page coverage (Docker-gated locally, mandatory in the existing
 CI real-image job and release gate) uses ghcr.io/silverbulletmd/silverbullet:2.12.1:
 
+Each new rejection case has its own disposable container and mounted space so prior
+browser synchronization or another case's filesystem cleanup cannot alter its corpus.
+
 - A 65,537-byte Markdown page is uploaded to the disposable /.fs fixture. Assert it
   is listed with the exact size and served byte-for-byte with the matching SHA-256 ETag.
   The production SilverBulletClient must raise PermanentPageError(page_too_large).

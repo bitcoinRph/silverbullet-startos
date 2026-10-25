@@ -253,6 +253,12 @@ def test_real_index_and_rejected_content(upstream, tmp_path):
     asyncio.run(run())
 
 
+@pytest.fixture
+def rejection_upstream(tmp_path_factory):
+    # Each rejection case owns its corpus: prior browser sync/cleanup cannot race it.
+    yield from upstream.__wrapped__(tmp_path_factory)
+
+
 @pytest.mark.parametrize(
     "case,raw,reason",
     [
@@ -261,13 +267,14 @@ def test_real_index_and_rejected_content(upstream, tmp_path):
     ],
     ids=["oversized", "invalid-utf8"],
 )
-def test_real_image_permanent_page_rejection(upstream, tmp_path, case, raw, reason):
+def test_real_image_permanent_page_rejection(rejection_upstream, tmp_path, case, raw, reason):
     """No fake transport: demand exact listing, bytes, ETag and production skip behavior."""
     import asyncio
 
     from silverbullet_memory.client import PermanentPageError, SilverBulletClient
     from silverbullet_memory.index import MemoryIndex
 
+    upstream = rejection_upstream
     note = f"Business/Rejected-{case}.md"
     good = f"Business/Readable-{case}.md"
     path = "/.fs/" + note
