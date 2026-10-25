@@ -56,6 +56,19 @@ export const v2_11_0_0 = VersionInfo.of({
 })
 
 export const current = VersionInfo.of({
+  version: '2.12.1:1',
+  releaseNotes: {
+    en_US:
+      'Opt-in authenticated Business Memory MCP with a separate rebuildable index. Runtime API is now always disabled. MCP mutations remain hard-disabled pending real-client safety evidence; previews are available. Preserves login and space; adds separate atomic Agent API state.',
+  },
+  migrations: {
+    up: async () => {},
+    // :0 ignores agent-api.json and the rebuildable index. No canonical data change.
+    down: async () => {},
+  },
+})
+
+export const v2_12_1_0 = VersionInfo.of({
   version: '2.12.1:0',
   releaseNotes: {
     en_US:

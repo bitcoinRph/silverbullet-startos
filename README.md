@@ -2,13 +2,30 @@
   <img src="icon.png" alt="SilverBullet Logo" width="21%">
 </p>
 
-# SilverBullet on StartOS
+# SilverBullet Business Memory on StartOS
+
+Wrapper `2.12.1:1` keeps upstream `2.12.1` and adds an opt-in, authenticated
+Streamable HTTP MCP daemon with a disposable SQLite FTS5 index. The Agent API is
+disabled by default: no extra daemon, interface or `SB_AUTH_TOKEN`. The experimental
+Runtime API is now unconditionally disabled (`SB_RUNTIME_API=0`), including when
+MCP is enabled. This is an intentional change from the previous wrapper.
+
+Safety downgrade: actual MCP mutations are hard-disabled pending real-image
+executable-content and browser-concurrency evidence. The six tools are
+`memory_status`, `memory_search`, `memory_get`, `memory_backlinks`, `memory_create`
+and `memory_replace_text`; create provides validated previews, replacement has no
+operator-managed prefixes in this release. No environment flag bypasses this gate.
+
+See [Architecture](docs/ARCHITECTURE.md) and [Operations](docs/OPERATIONS.md) for
+the security model, exact tool contracts, operational actions and unverified gates.
+The optional [Hermes integration](integrations/hermes/README.md) is independently
+versioned `0.1.0` and excluded from integration-only automatic s9pk publication.
 
 > **Upstream repo:** <https://github.com/silverbulletmd/silverbullet>
 > **Upstream docs:** <https://silverbullet.md/>
 >
 > Everything not listed in this document behaves the same as upstream
-> SilverBullet 2.11.0. If a feature, setting, or behavior is not mentioned here,
+> SilverBullet 2.12.1. If a feature, setting, or behavior is not mentioned here,
 > the upstream documentation is accurate and fully applicable.
 
 [SilverBullet](https://silverbullet.md/) is an open-source, self-hosted personal
@@ -39,7 +56,7 @@ and the Space Lua scripting environment.
 
 | Property      | Value                                            |
 | ------------- | ------------------------------------------------ |
-| Image         | `ghcr.io/silverbulletmd/silverbullet:2.11.0`     |
+| Image         | `ghcr.io/silverbulletmd/silverbullet:2.12.1`     |
 | Architectures | x86_64, aarch64                                  |
 | Entrypoint    | Upstream default (`tini` → `docker-entrypoint.sh` → `silverbullet`) |
 
@@ -61,6 +78,11 @@ entirely through the upstream `SB_*` environment variables (see below).
   container data folder.
 - `store.json` lives at the **root** of the `main` volume (outside `/data`) and
   holds the generated login password. It never appears as a note.
+- `agent-api.json` holds the opt-in setting and three distinct generated tokens,
+  with atomic temp-file/fsync/rename writes. Install/update/restore generate it
+  only if absent; malformed state is not silently replaced. `store.json` is never
+  rewritten after initial install. The separate `index` volume is derived and
+  excluded from backups; MCP never mounts the canonical space.
 
 ---
 
@@ -86,7 +108,7 @@ entirely through the upstream `SB_*` environment variables (see below).
 
 | StartOS-Managed (env vars)                        | Upstream-Managed                          |
 | ------------------------------------------------- | ----------------------------------------- |
-| `SB_HOSTNAME`, `SB_PORT`, `SB_FOLDER`, `SB_USER`  | Everything else (Space Lua config, themes, settings pages, libraries, etc.) |
+| `SB_HOSTNAME`, `SB_PORT`, `SB_FOLDER`, `SB_USER`, `SB_RUNTIME_API`; opt-in `SB_AUTH_TOKEN` | In-app Space Lua config, themes, settings pages and libraries |
 
 The login username is fixed to `admin`; the password is generated at install.
 All other SilverBullet behavior is configured from within the app, exactly as
@@ -99,6 +121,7 @@ documented upstream.
 | Interface | Port | Protocol | Purpose                |
 | --------- | ---- | -------- | ---------------------- |
 | Web UI    | 3000 | HTTP     | SilverBullet web app   |
+| Memory MCP (opt-in) | 3001 | HTTP | Masked API interface at `/mcp` |
 
 **Access methods:**
 
@@ -115,14 +138,19 @@ documented upstream.
 | ----------------- | ----------------------------------------- | ---------- | ------------ | --------------------- |
 | **Get Credentials** | Retrieve the login username and password | Enabled    | Any status   | Username + masked password |
 
+Agent actions: Enable/Disable Agent Memory API, Get MCP Credentials (external tokens
+masked), Rotate MCP Tokens, Rotate Internal API Token, Rebuild Memory Index. Enable
+requires exact private proxy Host and Origin allowlists; browser origins default
+to none. Enable/disable/rotations restart only when invoked by an operator.
+
 ---
 
 ## Backups and Restore
 
 **Included in backup:**
 
-- `main` volume — your entire space (notes and attachments) plus `store.json`
-  (the generated password).
+- `main` volume — your entire space, `store.json` and separate `agent-api.json`.
+- Not included: the dedicated, rebuildable `index` volume.
 
 **Restore behavior:** The volume is fully restored before the service starts, so
 your notes and existing credentials are preserved.
@@ -133,7 +161,8 @@ your notes and existing credentials are preserved.
 
 | Check         | Method                | Messages                                                                        |
 | ------------- | --------------------- | ------------------------------------------------------------------------------- |
-| Web Interface | Port listening (3000) | Success: "The web interface is ready" / Error: "The web interface is not ready" |
+| Web Interface | Bounded `/.ping`, HTTP 200 and body `OK` | Fails on other statuses or bodies |
+| Memory index | `/health/ready`, HTTP 200 and `ready: true` | HTTP 503 until a full authenticated sync; stale syncs are not ready |
 
 ---
 
@@ -156,11 +185,8 @@ None.
 3. **Port is fixed at 3000** internally; StartOS maps it to its own interfaces.
 4. **`CONTAINER_BOOT.md` auto-execution** (an upstream entrypoint feature) is
    untested in this package and not recommended.
-5. **2.10.0 changed the server/CLI backend from Go to Rust and changed the
-   upstream Docker health endpoint from `/.ping` to `/.instance`.** This package
-   still uses a StartOS port-listening readiness check; if login or space routing
-   behaves oddly behind a proxy, verify the StartOS URL/scheme forwarding before
-   assuming a package regression.
+5. **Health is checked against the documented 2.12.1 `/.ping` response.** If
+   routing behaves oddly behind a proxy, verify the StartOS URL/scheme forwarding.
 6. **2.11.0 changes the upstream container entrypoint/data-folder behavior.**
    The image now prefers `/data` and treats `/space` as legacy. This package
    mounts the same persistent StartOS `main/space` subpath at `/data`, so notes
@@ -182,8 +208,8 @@ None.
 
 ```yaml
 package_id: silverbullet
-upstream_version: 2.11.0
-image: ghcr.io/silverbulletmd/silverbullet:2.11.0
+upstream_version: 2.12.1
+image: ghcr.io/silverbulletmd/silverbullet:2.12.1
 architectures: [x86_64, aarch64]
 volumes:
   main: /data

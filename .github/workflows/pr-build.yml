@@ -24,9 +24,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Checkout PR merge revision
+      - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - name: Set up Node.js
@@ -107,12 +108,23 @@ jobs:
           sha256sum "silverbullet_${ARCH}.s9pk" > "silverbullet_${ARCH}.s9pk.sha256"
           sha256sum --check "silverbullet_${ARCH}.s9pk.sha256"
 
+      - name: Inspect actual package manifest
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          start-cli s9pk inspect "silverbullet_${ARCH}.s9pk" manifest --format json > "manifest-${ARCH}.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=json.dumps(d); assert "2.12.1:1" in s; assert "memory-mcp" in s; assert "silverbullet" in s; assert "index" in s' "manifest-${ARCH}.json"
+          git rev-parse HEAD > "source-${ARCH}.txt"
+
       - name: Upload package and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: silverbullet-${{ matrix.arch }}-pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          name: silverbullet-${{ matrix.arch }}-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: |
             silverbullet_${{ matrix.arch }}.s9pk
             silverbullet_${{ matrix.arch }}.s9pk.sha256
+            manifest-${{ matrix.arch }}.json
+            source-${{ matrix.arch }}.txt
           if-no-files-found: error
           retention-days: 14

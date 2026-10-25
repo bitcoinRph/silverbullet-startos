@@ -10,10 +10,16 @@ export const manifest = setupManifest({
   marketingUrl: 'https://silverbullet.md',
   donationUrl: null,
   description: { short, long },
-  volumes: ['main'],
+  volumes: ['main', 'index'],
   images: {
     silverbullet: {
       source: { dockerTag: 'ghcr.io/silverbulletmd/silverbullet:2.12.1' },
+      arch: ['x86_64', 'aarch64'],
+    },
+    'memory-mcp': {
+      source: {
+        dockerBuild: { dockerfile: 'memory-mcp/Dockerfile', workdir: 'memory-mcp' },
+      },
       arch: ['x86_64', 'aarch64'],
     },
   },

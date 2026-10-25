@@ -10,7 +10,7 @@ name: Build and Release
 on:
   push:
     branches: [main]
-    paths-ignore: ['**/*.md']
+    paths-ignore: ['**/*.md', 'integrations/**']
   workflow_dispatch:
 
 concurrency:
@@ -128,6 +128,22 @@ jobs:
           npm test
           npm run check
           npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Memory source and exact-image release gates
+        run: |
+          set -euo pipefail
+          pip install --require-hashes -r memory-mcp/requirements-dev.txt
+          ruff check memory-mcp integrations/hermes
+          ruff format --check memory-mcp integrations/hermes
+          mypy --ignore-missing-imports memory-mcp/src
+          PYTHONPATH=memory-mcp/src pytest memory-mcp/tests integrations/hermes/tests -q
+          pip-audit --require-hashes -r memory-mcp/requirements.txt
+          playwright install --with-deps chromium
+          SB_REAL_IMAGE=1 PYTHONPATH=memory-mcp/src pytest memory-mcp/tests/test_real_image.py -v
 
       - name: Build .s9pk packages (per-arch + universal)
         # x86 -> silverbullet_x86_64.s9pk, arm -> silverbullet_aarch64.s9pk,

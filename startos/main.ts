@@ -3,6 +3,7 @@ import { sdk } from './sdk'
 import { spaceDir, uiPort, username } from './utils'
 import { storeJson } from './fileModels/store.json'
 import { getCredentials } from './actions/getCredentials'
+import { agentApi } from './fileModels/agent-api.json'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info(i18n('Starting SilverBullet'))
@@ -38,6 +39,13 @@ export const main = sdk.setupMain(async ({ effects }) => {
     )
   }
 
+  const api = await agentApi.read().catch(async () => {
+    await sdk.action.createOwnTask(effects, getCredentials, 'critical', {
+      reason:
+        'Agent API unavailable. Restore a known-good agent-api.json backup. SilverBullet login and notes are unchanged; the Agent API remains closed.',
+    })
+    return null
+  })
   const appSub = await sdk.SubContainer.of(
     effects,
     { imageId: 'silverbullet' },
@@ -50,7 +58,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'silverbullet-sub',
   )
 
-  return sdk.Daemons.of(effects).addDaemon('primary', {
+  const daemons = sdk.Daemons.of(effects).addDaemon('primary', {
     subcontainer: appSub,
     exec: {
       // The upstream image's entrypoint launches the server; configure it via SB_* env.
@@ -62,16 +70,64 @@ export const main = sdk.setupMain(async ({ effects }) => {
         SB_PORT: String(uiPort),
         SB_FOLDER: spaceDir,
         SB_USER: `${username}:${password}`,
+        SB_RUNTIME_API: '0',
+        ...(api?.enabled ? { SB_AUTH_TOKEN: api.silverbulletApiToken } : {}),
       },
     },
     ready: {
       display: i18n('Web Interface'),
-      fn: () =>
-        sdk.healthCheck.checkPortListening(effects, uiPort, {
-          successMessage: i18n('The web interface is ready'),
-          errorMessage: i18n('The web interface is not ready'),
-        }),
+      fn: async () => {
+        try {
+          const response = await fetch(`http://127.0.0.1:${uiPort}/.ping`, {
+            signal: AbortSignal.timeout(3000),
+            redirect: 'error',
+          })
+          if (response.status === 200 && (await response.text()) === 'OK')
+            return { result: 'success', message: 'SilverBullet is ready' }
+        } catch {}
+        return { result: 'failure', message: 'SilverBullet is not ready' }
+      },
     },
     requires: [],
+  })
+  if (!api?.enabled) return daemons
+  const memorySub = await sdk.SubContainer.of(
+    effects,
+    { imageId: 'memory-mcp' },
+    sdk.Mounts.of().mountVolume({
+      volumeId: 'index',
+      subpath: null,
+      mountpoint: '/index',
+      readonly: false,
+    }),
+    'memory-sub',
+  )
+  await memorySub.execFail(['chown', '10001:10001', '/index'], { user: 'root' })
+  return daemons.addDaemon('memory-mcp', {
+    subcontainer: memorySub,
+    exec: {
+      command: sdk.useEntrypoint(),
+      user: '10001:10001',
+      sigtermTimeout: 10000,
+      env: {
+        SB_BASE_URL: 'http://127.0.0.1:3000',
+        SB_API_TOKEN: api.silverbulletApiToken,
+        MCP_READ_TOKEN: api.mcpReadToken,
+        MCP_WRITE_TOKEN: api.mcpWriteToken,
+        MEMORY_INDEX: '/index/memory.sqlite',
+        MCP_ALLOWED_HOSTS: JSON.stringify(api.allowedHosts),
+        MCP_ALLOWED_ORIGINS: JSON.stringify(api.allowedOrigins),
+      },
+    },
+    ready: {
+      display: 'Memory index',
+      fn: () =>
+        sdk.healthCheck.runHealthScript(
+          ['python', '-m', 'silverbullet_memory.health'],
+          memorySub,
+          { timeout: 5000, errorMessage: 'Memory index not ready' },
+        ),
+    },
+    requires: ['primary'],
   })
 })
