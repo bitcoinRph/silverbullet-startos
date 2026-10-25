@@ -14,6 +14,10 @@ class UpstreamError(Exception):
     pass
 
 
+class PermanentPageError(UpstreamError):
+    """Bounded content cannot be indexed; retry only when its inventory stamp changes."""
+
+
 class SilverBulletClient:
     def __init__(self, base_url: str, token: str, http: httpx.AsyncClient):
         url = urlsplit(base_url)
@@ -31,7 +35,9 @@ class SilverBulletClient:
         self.headers = {"Authorization": "Bearer " + token, "X-Sync-Mode": "true"}
         self.http = http
 
-    async def _get(self, suffix: str, limit: int) -> tuple[bytes, httpx.Headers]:
+    async def _get(
+        self, suffix: str, limit: int, *, page: bool = False
+    ) -> tuple[bytes, httpx.Headers]:
         try:
             async with self.http.stream(
                 "GET",
@@ -46,6 +52,8 @@ class SilverBulletClient:
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)
                     if len(body) > limit:
+                        if page:
+                            raise PermanentPageError("page_too_large")
                         raise UpstreamError("upstream_response_too_large")
                 return bytes(body), response.headers
         except httpx.HTTPError:
@@ -70,7 +78,7 @@ class SilverBulletClient:
 
     async def get(self, path: str) -> dict[str, Any]:
         validate_path(path)
-        raw, headers = await self._get("/" + quote(path, safe="/"), MAX_NOTE)
+        raw, headers = await self._get("/" + quote(path, safe="/"), MAX_NOTE, page=True)
         digest = hashlib.sha256(raw).hexdigest()
         etag = headers.get("etag", "")
         if etag != '"sha256:' + digest + '"':
@@ -78,5 +86,5 @@ class SilverBulletClient:
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:
-            raise UpstreamError("invalid_markdown_encoding") from None
+            raise PermanentPageError("invalid_markdown_encoding") from None
         return {"path": path, "content": content, "etag": etag, "sha256": digest}

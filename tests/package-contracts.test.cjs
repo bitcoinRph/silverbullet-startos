@@ -17,6 +17,12 @@ test('manifest Dockerfile ingredient resolves from the repository root', () => {
   assert.ok(existsSync(file), `missing Dockerfile ingredient: ${file}`)
   assert.equal(file, 'memory-mcp/Dockerfile')
 })
+test('fix-forward wrapper revision matches package CI assertion and public docs without changing upstream', () => {
+  assert.match(read('startos/versions/current.ts'), /export const current = VersionInfo.of\(\{\s*version: '2\.12\.1:2'/)
+  assert.ok(read('.github/workflows/pr-build.yml').includes('assert "2.12.1:2" in s'))
+  for (const file of ['README.md', 'docs/ARCHITECTURE.md', 'docs/OPERATIONS.md']) assert.ok(read(file).includes('2.12.1:2'), file)
+  assert.match(read('startos/manifest/index.ts'), /silverbullet:2\.12\.1/)
+})
 test('PR builds exact head and release excludes integration-only changes', () => {
   assert.ok(read('.github/workflows/pr-build.yml').includes('ref: ${{ github.event.pull_request.head.sha }}'))
   assert.match(read('.github/workflows/release.yml'), /integrations\/\*\*/)

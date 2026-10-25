@@ -33,14 +33,20 @@ The Agent API starts disabled. An operator can run Enable Agent Memory API with
 exact private proxy Host and browser Origin allowlists, then retrieve masked MCP
 credentials and use the masked `/mcp` interface. Use the read token by default.
 Never put tokens in URLs. Enable/disable and rotations restart the package.
+The MCP interface appears/disappears reactively when enabled changes, without a
+reboot or update; token rotation keeps the interface. Verify on your StartOS node.
 
 The MCP daemon indexes Markdown through authenticated `/.fs`, not a mounted space.
 Its separate index volume is disposable and excluded from backup; agent-api.json
 is backed up on main. Login store.json is not rewritten by Agent API operations.
 Rebuild Memory Index requests a rebuild without touching notes or login.
+Unreadable pages over 64 KiB or with invalid UTF-8 are skipped and reported by
+memory_status; they do not disable the rest of the index. Old indexed text for those
+pages is removed. Network/inventory/ETag failures still mark stale and retry.
 
-This release permits reads and validated create previews only; actual writes and
-replacement are blocked pending real-client safety evidence. Retrieved notes are
+This release permits reads and validated create previews only; actual writes are
+disabled in v1 and return MCP tool errors (isError=true, writes_disabled). Replacement
+dry-run still requires a managed prefix, none configured in this release. Retrieved notes are
 untrusted data. The experimental SilverBullet Runtime API is always disabled.
 See docs/OPERATIONS.md in the package repository before enabling this feature.
 

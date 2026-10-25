@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from test_index import Corpus
 
 
@@ -29,12 +30,8 @@ def test_read_tools_and_previews(tmp_path):
     assert first == second and first["dry_run"] is True
     assert first["path"].startswith("Inbox/") and first["path"].endswith(".md")
     assert first["sha256"]
-    assert (
-        tools.memory_create("Inbox/a.md", "Safe", "note", provenance, "request-1", dry_run=False)[
-            "error"
-        ]
-        == "writes_disabled"
-    )
+    with pytest.raises(ToolError, match="writes_disabled"):
+        tools.memory_create("Inbox/a.md", "Safe", "note", provenance, "request-1", dry_run=False)
     assert len(corpus.pages) == 3
     index.close()
 
@@ -56,7 +53,8 @@ def test_replace_exact_etag_path_and_content_gates(tmp_path):
         return await tools.memory_replace_text(**args)
 
     assert asyncio.run(replace())["dry_run"] is True
-    assert asyncio.run(replace(dry_run=False))["error"] == "writes_disabled"
+    with pytest.raises(ToolError, match="writes_disabled"):
+        asyncio.run(replace(dry_run=False))
     assert asyncio.run(replace(expected_etag='"sha256:' + "0" * 64 + '"'))["error"] == "conflict"
     for args in [dict(old_text="absent"), dict(new_text="${1}"), dict(path="Business/A.md")]:
         with pytest.raises(ValueError):

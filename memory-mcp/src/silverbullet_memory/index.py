@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .client import UpstreamError
+from .client import PermanentPageError, UpstreamError
 from .security import validate_path
 
 
@@ -75,6 +75,9 @@ class MemoryIndex:
                 "CREATE TABLE IF NOT EXISTS pages(path TEXT PRIMARY KEY, content TEXT, etag TEXT, sha256 TEXT, stamp TEXT, meta TEXT, links TEXT, updated REAL)"
             )
             db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(path, title, tags, body)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS skipped(path TEXT PRIMARY KEY, stamp TEXT, reason TEXT)"
+            )
             if [r[1] for r in db.execute("PRAGMA table_info(pages)")] != [
                 "path",
                 "content",
@@ -99,19 +102,30 @@ class MemoryIndex:
             "stale": self.stale,
             "last_complete_sync": self.last_sync,
             "documents": self.db.execute("SELECT COUNT(*) FROM pages").fetchone()[0],
+            "skipped": self.db.execute("SELECT COUNT(*) FROM skipped").fetchone()[0],
+            "skipped_details": [
+                {"path": row["path"][:512], "reason": row["reason"]}
+                for row in self.db.execute(
+                    "SELECT path, reason FROM skipped ORDER BY path LIMIT 10"
+                )
+            ],
             "upstream_version": "2.12.1",
-            "package_version": "2.12.1:1",
+            "package_version": "2.12.1:2",
             "writes_enabled": False,
             "degraded_capabilities": ["mutations_disabled_pending_real_client_gates"],
         }
 
     async def sync(self, client: Any, *, rebuild: bool = False) -> None:
+        # Unknown failures must never leave a previously ready index marked current.
+        self.stale = True
         try:
             inventory = await client.inventory()
         except UpstreamError:
             self.stale = True
             return
         existing = {r["path"]: dict(r) for r in self.db.execute("SELECT * FROM pages")}
+        rejected = {r["path"]: dict(r) for r in self.db.execute("SELECT * FROM skipped")}
+        skipped: dict[str, Any] = {}
         rows: dict[str, Any] = {}
         failed = False
         for entry in inventory:
@@ -121,6 +135,9 @@ class MemoryIndex:
             except ValueError:
                 continue
             stamp = json.dumps([entry["lastModified"], entry.get("size")])
+            if not rebuild and path in rejected and rejected[path]["stamp"] == stamp:
+                skipped[path] = rejected[path]
+                continue
             if not rebuild and path in existing and existing[path]["stamp"] == stamp:
                 rows[path] = existing[path]
                 continue
@@ -137,6 +154,16 @@ class MemoryIndex:
                     links=json.dumps(links),
                     updated=entry["lastModified"],
                 )
+            except PermanentPageError as error:
+                skipped[path] = {"path": path, "stamp": stamp, "reason": str(error)}
+                # Never serve old text after a permanent rejection, even if another
+                # page or the later rebuild swap fails. This state is disposable.
+                with self.db:
+                    self.db.execute("DELETE FROM pages WHERE path=?", (path,))
+                    self.db.execute("DELETE FROM fts WHERE path=?", (path,))
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO skipped VALUES(?,?,?)", (path, stamp, str(error))
+                    )
             except (UpstreamError, ValueError):
                 failed = True
                 if path in existing:
@@ -144,7 +171,7 @@ class MemoryIndex:
         if rebuild and failed:
             self.stale = True
             return
-        # A complete validated inventory controls deletion. Failed file reads retain old entries.
+        # Complete inventory controls deletion; only transient reads retain old entries.
         target = self.path
         if rebuild:
             fd, name = tempfile.mkstemp(prefix=".memory-rebuild-", dir=self.path.parent)
@@ -155,6 +182,11 @@ class MemoryIndex:
             with db:
                 db.execute("DELETE FROM pages")
                 db.execute("DELETE FROM fts")
+                db.execute("DELETE FROM skipped")
+                db.executemany(
+                    "INSERT INTO skipped VALUES(?,?,?)",
+                    [(p, row["stamp"], row["reason"]) for p, row in sorted(skipped.items())],
+                )
                 for path, row in sorted(rows.items()):
                     db.execute(
                         "INSERT INTO pages VALUES(?,?,?,?,?,?,?,?)",

@@ -56,6 +56,19 @@ export const v2_11_0_0 = VersionInfo.of({
 })
 
 export const current = VersionInfo.of({
+  version: '2.12.1:2',
+  releaseNotes: {
+    en_US:
+      'Fix-forward for :1, merged before final review: reactive Agent API interface enable/disable, bounded skipped unreadable pages, one-shot rebuild requests, and honest MCP tool descriptions/errors. SilverBullet stays at 2.12.1; API opt-in, disabled Runtime API, read-only MCP, login and canonical notes are unchanged.',
+  },
+  migrations: {
+    up: async () => {},
+    // Both revisions use the same canonical state; the index remains disposable.
+    down: async () => {},
+  },
+})
+
+export const v2_12_1_1 = VersionInfo.of({
   version: '2.12.1:1',
   releaseNotes: {
     en_US:

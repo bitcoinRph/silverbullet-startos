@@ -20,13 +20,21 @@ memory provider may be selected at a time. No installation was performed by this
 
 is_available uses only local config/secret checks. initialize binds hermes_home and
 agent_context. queue_prefetch uses spawn_context_thread for context propagation;
-prefetch never blocks on network and returns the matching cached query or an empty
-string while warming. The first turn can have no recall. One worker makes one bounded
+prefetch never blocks on network. Hermes queues the completed turn's user query and
+consumes recall on the next turn, whose query normally differs. The provider returns
+the latest generation once for the same session, not only on exact query equality;
+an expired/missing result returns an empty string while warming. The first turn can
+have no recall. One worker plus one coalesced latest pending request makes bounded
 search (with protocol initialization), excludes Inbox/Sources before top-k, and caps
-injected output at 4,000 characters. Additional client-side filtering is defense in
+injected output at 4,000 characters including the explicit untrusted-data fence.
+Snippets and paths are JSON-quoted with escaped fence delimiters/newlines. Additional client-side filtering is defense in
 depth. Cached recall expires after 15 seconds; stale-index results and search failures
 yield a safe degraded marker without exception contents.
-No sync_turn, pre-compression or session-end writes occur. Shutdown discards recall.
+New generations invalidate old cached/in-flight results; session changes cannot read
+another session's cache. Initialization and shutdown discard recall and invalidate
+old workers' results. Cached data is labeled previous-turn recall, not evidence that
+it is relevant to a new topic; use MCP search for a new current-query lookup.
+No sync_turn, pre-compression or session-end writes occur.
 
 Install the single skills/silverbullet-memory/SKILL.md only with approval. It covers
 retrieval, citations, untrusted content and approval-gated curation. The current s9pk

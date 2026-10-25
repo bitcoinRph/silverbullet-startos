@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
+import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from test_index import Corpus
@@ -18,15 +19,16 @@ async def authenticated_transport(url, headers):
 
 
 @asynccontextmanager
-async def running(tmp_path):
+async def running(tmp_path, *, client=None):
     from silverbullet_memory.index import MemoryIndex
     from silverbullet_memory.tools import MemoryTools
     from silverbullet_memory.server import create_app
 
+    client = client if client is not None else Corpus()
     index = MemoryIndex(tmp_path / "memory.sqlite")
-    await index.sync(Corpus())
+    await index.sync(client)
     app = create_app(
-        MemoryTools(Corpus(), index),
+        MemoryTools(client, index),
         "r" * 48,
         "w" * 48,
         ["127.0.0.1:*"],
@@ -109,6 +111,38 @@ def test_real_http_inspect_and_call_all_six_tools(tmp_path):
     asyncio.run(run())
 
 
+def test_skipped_page_keeps_protocol_readiness_and_hermes_recall_usable(tmp_path):
+    import json
+    from test_rejected_pages import Space, client_for
+
+    async def run():
+        space = Space()
+        space.pages["Business/b.md"] = b"x" * 65537
+        async with client_for(space) as client:
+            async with running(tmp_path, client=client) as base:
+                async with httpx.AsyncClient(base_url=base) as http:
+                    assert (await http.get("/health/ready")).status_code == 200
+                async with authenticated_transport(
+                    base + "/mcp", headers={"Authorization": "Bearer " + "r" * 48}
+                ) as (read, write, _):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        status = await session.call_tool("memory_status", {})
+                        assert not status.isError
+                        data = json.loads(status.content[0].text)
+                        assert data["ready"] is True and data["skipped"] == 1
+                        result = await session.call_tool("memory_search", {"query": "bitcoin"})
+                        assert not result.isError
+                        # Match the Hermes read client's official SDK structured-list decoding.
+                        assert result.structuredContent is not None
+                        rows = result.structuredContent["result"]
+                        assert len(rows) == 1 and rows[0]["path"] == "Business/a.md"
+                        assert rows[0]["index_stale"] is False
+                        assert rows[0]["untrusted_content"] is True
+
+    asyncio.run(run())
+
+
 def test_hermes_read_client_through_real_transport(tmp_path):
     import importlib.util
     from pathlib import Path
@@ -172,5 +206,79 @@ def test_http_auth_origin_size_depth_and_readiness(tmp_path):
                     )
                 ).status_code == 403
                 assert (await http.get("/health/ready")).status_code == 200
+
+    asyncio.run(run())
+
+
+def test_protocol_tool_descriptions_are_agent_readable_and_honest(tmp_path):
+    async def run():
+        async with running(tmp_path) as base:
+            async with authenticated_transport(
+                base + "/mcp", headers={"Authorization": "Bearer " + "w" * 48}
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = (await session.list_tools()).tools
+                    assert len(tools) == 6
+                    assert all(t.description and t.description.strip() for t in tools)
+                    for tool in tools:
+                        if tool.name in {"memory_create", "memory_replace_text"}:
+                            description = tool.description.lower()
+                            assert "preview" in description and "fail-closed" in description
+                            assert "writes disabled in v1" in description
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        (
+            "memory_create",
+            {
+                "path": "Inbox/a.md",
+                "content": "Safe note",
+                "kind": "note",
+                "provenance": {
+                    "agent_id": "test",
+                    "source": "user",
+                    "created_at": "2026-01-01T00:00:00Z",
+                },
+                "idempotency_key": "one",
+                "dry_run": False,
+            },
+        ),
+        (
+            "memory_replace_text",
+            {
+                "path": "Business/A.md",
+                "expected_etag": '"sha256:' + "0" * 64 + '"',
+                "old_text": "x",
+                "new_text": "y",
+                "reason": "test",
+                "dry_run": False,
+            },
+        ),
+    ],
+)
+def test_protocol_mutations_are_actual_writes_disabled_errors(tmp_path, name, args):
+    async def run():
+        async with running(tmp_path) as base:
+            async with authenticated_transport(
+                base + "/mcp", headers={"Authorization": "Bearer " + "w" * 48}
+            ) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(name, args)
+                    assert result.isError is True
+                    text = " ".join(getattr(part, "text", "") for part in result.content)
+                    assert "writes_disabled" in text
+                    assert "path_not_agent_managed" not in text
+                    if name == "memory_replace_text":
+                        preview = await session.call_tool(name, {**args, "dry_run": True})
+                        assert preview.isError is True
+                        assert "path_not_agent_managed" in " ".join(
+                            getattr(part, "text", "") for part in preview.content
+                        )
 
     asyncio.run(run())

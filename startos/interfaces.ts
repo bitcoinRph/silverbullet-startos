@@ -22,8 +22,8 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
 
   const uiReceipt = await uiMultiOrigin.export([ui])
 
-  const api = await agentApi.read().catch(() => null)
-  if (!api?.enabled) return [uiReceipt]
+  const enabled = await agentApi.enabled().const(effects)
+  if (!enabled) return [uiReceipt]
   const mcpHost = sdk.MultiHost.of(effects, 'mcp-multi')
   const mcpOrigin = await mcpHost.bindPort(3001, { protocol: 'http' })
   const mcp = sdk.createInterface(effects, {

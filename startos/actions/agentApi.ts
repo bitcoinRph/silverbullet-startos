@@ -164,11 +164,27 @@ export const rebuildMemoryIndex = sdk.Action.withoutInput(
     'Requests a derived index rebuild. Notes and credentials are unchanged.',
   ),
   async () => {
-    // No database deletion while the daemon has it open. The poller consumes this marker.
-    await fs.writeFile(
-      sdk.volumes.index.subpath('rebuild-request'),
-      new Date().toISOString(),
-      { mode: 0o644 },
-    )
+    // Publish atomically so the poller can rename/claim a complete request.
+    // Never delete the database while the daemon has it open.
+    const marker = sdk.volumes.index.subpath('rebuild-request')
+    const temporary = `${marker}.${newToken()}.tmp`
+    try {
+      const file = await fs.open(temporary, 'wx', 0o644)
+      try {
+        await file.writeFile(new Date().toISOString())
+        await file.sync()
+      } finally {
+        await file.close()
+      }
+      await fs.rename(temporary, marker)
+      const directory = await fs.open(sdk.volumes.index.subpath(''), 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    } finally {
+      await fs.rm(temporary, { force: true })
+    }
   },
 )

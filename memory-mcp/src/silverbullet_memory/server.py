@@ -188,15 +188,18 @@ def create_app(
 
     async def poll_index() -> None:
         marker = tools.index.path.parent / "rebuild-request"
-        last_marker = ""
+        pending = marker.with_name("rebuild-in-progress")
         while True:
             try:
-                current = marker.read_text() if marker.exists() else ""
-                await tools.index.sync(
-                    tools.client, rebuild=bool(current and current != last_marker)
-                )
-                if not tools.index.stale:
-                    last_marker = current
+                # Atomic claim: a new request published during this attempt stays
+                # at marker and is never deleted by completion of the old work.
+                if not os.path.lexists(pending):
+                    with suppress(FileNotFoundError):
+                        marker.rename(pending)
+                rebuild = os.path.lexists(pending)
+                await tools.index.sync(tools.client, rebuild=rebuild)
+                if rebuild and not tools.index.stale:
+                    pending.unlink()
             except Exception:
                 tools.index.stale = True
                 LOG.warning("index_sync_failed")
