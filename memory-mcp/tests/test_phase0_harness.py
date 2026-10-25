@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -15,12 +16,40 @@ def spike():
     return module
 
 
-def test_runtime_probe_reaches_bearer_after_unauthorized_response():
+DISABLE_LOG = "runtime API disabled by SB_RUNTIME_API=0"
+
+
+def test_runtime_probe_requires_startup_log_and_repeats_bearer_checks(monkeypatch):
     module = spike()
     seen = []
+    waits = []
+    monkeypatch.setattr(module.time, "sleep", waits.append)
 
     def handler(request):
-        seen.append(request.headers.get("authorization"))
+        seen.append((request.url.path, request.headers.get("authorization")))
+        if not request.headers.get("authorization"):
+            return httpx.Response(401)
+        return httpx.Response(503, json={"error": "runtime not ready"})
+
+    with httpx.Client(
+        base_url="http://127.0.0.1:3000", transport=httpx.MockTransport(handler)
+    ) as client:
+        client.startup_logs = "INFO " + DISABLE_LOG + "\n"
+        module.test_runtime_disabled(client)
+    expected = [
+        (endpoint, auth)
+        for endpoint in ["/.runtime/lua", "/.runtime/lua_script"]
+        for auth in ["", "Bearer " + module.TOKEN]
+    ]
+    assert seen == expected * 2
+    assert len(waits) == 1 and 0 < waits[0] <= 10
+
+
+@pytest.mark.parametrize("logs", [None, "", "runtime starting", "SB_RUNTIME_API=0"])
+def test_runtime_503_without_exact_disable_log_remains_a_blocker(logs):
+    module = spike()
+
+    def handler(request):
         if not request.headers.get("authorization"):
             return httpx.Response(401)
         return httpx.Response(503, json={"error": "Runtime API is not enabled"})
@@ -28,25 +57,151 @@ def test_runtime_probe_reaches_bearer_after_unauthorized_response():
     with httpx.Client(
         base_url="http://127.0.0.1:3000", transport=httpx.MockTransport(handler)
     ) as client:
-        module.test_runtime_disabled(client)
-    assert seen == ["", "Bearer " + module.TOKEN] * 2
+        if logs is not None:
+            client.startup_logs = logs
+        with pytest.raises(AssertionError, match="startup log"):
+            module.test_runtime_disabled(client)
 
 
-def test_runtime_bearer_execution_and_generic_failures_remain_blockers():
+@pytest.mark.parametrize("endpoint", ["/.runtime/lua", "/.runtime/lua_script"])
+@pytest.mark.parametrize("delayed", [False, True])
+@pytest.mark.parametrize("status", [200, 400, 401, 500])
+def test_runtime_execution_or_unexpected_status_remains_a_blocker(
+    monkeypatch, endpoint, delayed, status
+):
     module = spike()
-    for response in [httpx.Response(200, text="2"), httpx.Response(503, json={"error": "other"})]:
-        seen = []
+    monkeypatch.setattr(module.time, "sleep", lambda _: None)
+    calls = 0
 
-        def handler(request):
-            seen.append(request.headers.get("authorization"))
-            return httpx.Response(401) if not request.headers.get("authorization") else response
+    def handler(request):
+        nonlocal calls
+        if not request.headers.get("authorization"):
+            return httpx.Response(401)
+        if request.url.path == endpoint:
+            calls += 1
+            if not delayed or calls == 2:
+                return httpx.Response(status, text="unexpected runtime response")
+        return httpx.Response(503, json={"error": "runtime not ready"})
 
-        with httpx.Client(
-            base_url="http://127.0.0.1:3000", transport=httpx.MockTransport(handler)
-        ) as client:
-            with pytest.raises(AssertionError):
-                module.test_runtime_disabled(client)
-        assert seen == ["", "Bearer " + module.TOKEN]
+    with httpx.Client(
+        base_url="http://127.0.0.1:3000", transport=httpx.MockTransport(handler)
+    ) as client:
+        client.startup_logs = DISABLE_LOG
+        with pytest.raises(AssertionError):
+            module.test_runtime_disabled(client)
+    assert calls == (2 if delayed else 1)
+
+
+def test_disposable_fixture_captures_container_logs_before_cleanup(monkeypatch):
+    module = spike()
+    commands = []
+
+    def output(command, **kwargs):
+        commands.append(command)
+        return DISABLE_LOG if command[1] == "logs" else "127.0.0.1:32768\n"
+
+    monkeypatch.setattr(module.subprocess, "check_output", output)
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda command, **kwargs: commands.append(command)
+    )
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        module.httpx,
+        "Client",
+        lambda **kwargs: real_client(
+            **kwargs, transport=httpx.MockTransport(lambda _: httpx.Response(200, text="OK"))
+        ),
+    )
+    fixture = module.upstream.__wrapped__()
+    try:
+        client = next(fixture)
+        assert getattr(client, "startup_logs", None) == DISABLE_LOG
+    finally:
+        fixture.close()
+    log_command = next(command for command in commands if command[1] == "logs")
+    assert log_command[2] == commands[-1][-1]
+    assert commands[-1][:3] == ["docker", "rm", "--force"]
+
+
+def test_unsaved_edit_loss_characterization_exercises_both_disabled_mcp_writes(
+    monkeypatch, tmp_path
+):
+    import hashlib
+    import playwright.sync_api
+
+    module = spike()
+    text = "initial concurrency text"
+    browser_text = text
+    requests = []
+
+    def handler(request):
+        nonlocal text, browser_text
+        requests.append((request.method, request.url.path))
+        if request.method == "PUT":
+            text = request.content.decode()
+            browser_text = text
+        etag = '"sha256:' + hashlib.sha256(text.encode()).hexdigest() + '"'
+        return httpx.Response(200, text=text, headers={"etag": etag})
+
+    locator = SimpleNamespace(
+        fill=lambda _: None,
+        click=lambda: None,
+        wait_for=lambda **_: None,
+        inner_text=lambda: browser_text,
+    )
+
+    def insert_text(value):
+        nonlocal browser_text
+        browser_text += value
+
+    page = SimpleNamespace(
+        goto=lambda _: None,
+        locator=lambda _: locator,
+        keyboard=SimpleNamespace(press=lambda _: None, insert_text=insert_text),
+        wait_for_timeout=lambda _: None,
+    )
+    browser = SimpleNamespace(new_page=lambda: page, close=lambda: None)
+
+    class Playwright:
+        def __enter__(self):
+            return SimpleNamespace(chromium=SimpleNamespace(launch=lambda: browser))
+
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(playwright.sync_api, "sync_playwright", Playwright)
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        module.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_async_client(**kwargs, transport=httpx.MockTransport(handler)),
+    )
+    from silverbullet_memory.tools import MemoryTools
+
+    invoked = []
+    create = MemoryTools.memory_create
+    replace = MemoryTools.memory_replace_text
+
+    def checked_create(self, *args, **kwargs):
+        assert kwargs["dry_run"] is False
+        result = create(self, *args, **kwargs)
+        invoked.append(("create", result["error"]))
+        return result
+
+    async def checked_replace(self, *args, **kwargs):
+        assert kwargs["dry_run"] is False
+        result = await replace(self, *args, **kwargs)
+        invoked.append(("replace", result["error"]))
+        return result
+
+    monkeypatch.setattr(MemoryTools, "memory_create", checked_create)
+    monkeypatch.setattr(MemoryTools, "memory_replace_text", checked_replace)
+    with httpx.Client(
+        base_url="http://127.0.0.1:32768", transport=httpx.MockTransport(handler)
+    ) as client:
+        module.test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(client, tmp_path)
+    assert invoked == [("create", "writes_disabled"), ("replace", "writes_disabled")]
+    assert [method for method, _ in requests if method != "GET"] == ["PUT", "PUT"]
 
 
 def test_browser_page_url_preserves_port_separator():

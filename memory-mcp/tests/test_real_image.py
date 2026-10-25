@@ -58,22 +58,27 @@ def upstream():
                     pass
                 time.sleep(1)
             assert client.get("/.ping").status_code == 200
+            client.startup_logs = subprocess.check_output(
+                ["docker", "logs", name], stderr=subprocess.STDOUT, text=True
+            )
             yield client
     finally:
         subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True)
 
 
 def test_runtime_disabled(upstream):
-    for endpoint in ["/.runtime/lua", "/.runtime/lua_script"]:
-        for auth in ["", "Bearer " + TOKEN]:
-            r = upstream.post(endpoint, headers={"Authorization": auth}, content="1 + 1")
-            # Primary 2.12.1 Runtime API docs also specify an exact 503-disabled
-            # response. A generic 503 or browser failure is NOT a passing gate.
-            if not auth:
-                assert r.status_code == 401, (endpoint, r.status_code)
-            else:
-                assert r.status_code == 503, (endpoint, r.status_code)
-                assert r.json().get("error") == "Runtime API is not enabled"
+    # 2.12.1 single-space mode retains a runtime wrapper without a transport.
+    # Its 503 body is not disable proof: require the exact multi.rs startup log.
+    assert "runtime API disabled by SB_RUNTIME_API=0" in getattr(upstream, "startup_logs", ""), (
+        "container startup log does not prove Runtime API env disable"
+    )
+    for attempt in range(2):
+        if attempt:
+            time.sleep(5)  # A delayed transport must not turn execution on.
+        for endpoint in ["/.runtime/lua", "/.runtime/lua_script"]:
+            for auth in ["", "Bearer " + TOKEN]:
+                r = upstream.post(endpoint, headers={"Authorization": auth}, content="1 + 1")
+                assert r.status_code == (503 if auth else 401), (endpoint, r.status_code)
 
 
 def test_conditional_writes(upstream):
@@ -93,8 +98,16 @@ def _page_url(upstream, page):
     return str(upstream.base_url.join("/" + page))
 
 
-def test_browser_unsaved_editor_concurrency(upstream):
+def test_upstream_unsaved_edit_loss_keeps_mcp_mutations_disabled(upstream, tmp_path):
+    # Characterize a STOP condition, not acceptable write behavior. This direct
+    # PUT is disposable-image-only; v1 MCP must remain read-only because of it.
+    # If upstream stops losing edits, fail and reevaluate the gate explicitly;
+    # do not automatically enable mutations or turn this into skip/xfail.
+    import asyncio
     from playwright.sync_api import sync_playwright
+    from silverbullet_memory.client import SilverBulletClient
+    from silverbullet_memory.index import MemoryIndex
+    from silverbullet_memory.tools import MemoryTools
 
     path = "/.fs/Inbox/ConcurrencySpike.md"
     assert upstream.put(path, content="initial concurrency text").status_code == 200
@@ -112,27 +125,65 @@ def test_browser_unsaved_editor_concurrency(upstream):
             editor.click()
             page.keyboard.press("Control+End")
             page.keyboard.insert_text("\nhuman-local-change")
+            assert "human-local-change" in editor.inner_text()
+            assert "human-local-change" not in upstream.get(path).text
             result = upstream.put(
                 path,
                 content="initial concurrency text\nagent-conditional-change",
                 headers={"If-Match": etag},
             )
-            assert result.status_code in (200, 412)
+            assert result.status_code == 200, "upstream concurrency gate needs reevaluation"
             page.wait_for_timeout(7000)
             server_text = upstream.get(path).text
-            if result.status_code == 200:
-                assert "agent-conditional-change" in server_text, "agent edit silently reverted"
-                assert (
-                    "human-local-change" in server_text
-                    or "human-local-change" in page.locator("body").inner_text()
-                ), "human edit silently lost"
-            else:
-                assert (
-                    "human-local-change" in server_text
-                    or "human-local-change" in editor.inner_text()
-                )
+            assert "agent-conditional-change" in server_text
+            assert "human-local-change" not in server_text
+            assert "human-local-change" not in page.locator("body").inner_text(), (
+                "upstream concurrency gate needs reevaluation"
+            )
         finally:
             browser.close()
+
+    async def verify_mcp_read_only():
+        async with httpx.AsyncClient() as http:
+            client = SilverBulletClient(str(upstream.base_url), TOKEN, http)
+            index = MemoryIndex(tmp_path / "concurrency.sqlite")
+            try:
+                # Test-only managed prefix reaches the replacement write gate;
+                # production has no managed prefixes and is stricter still.
+                tools = MemoryTools(client, index, managed_prefixes=("Inbox/",))
+                assert tools.memory_status()["writes_enabled"] is False
+                note = path.removeprefix("/.fs/")
+                before = await client.get(note)
+                assert (
+                    tools.memory_create(
+                        "Inbox/BlockedConcurrency.md",
+                        "Safe but blocked",
+                        "note",
+                        {
+                            "agent_id": "test",
+                            "source": "user",
+                            "created_at": "2026-01-01T00:00:00Z",
+                        },
+                        "concurrency-gate",
+                        dry_run=False,
+                    )["error"]
+                    == "writes_disabled"
+                )
+                assert (
+                    await tools.memory_replace_text(
+                        note,
+                        before["etag"],
+                        "agent-conditional-change",
+                        "mcp-must-not-write",
+                        "Verify concurrency stop condition",
+                        dry_run=False,
+                    )
+                )["error"] == "writes_disabled"
+                assert await client.get(note) == before
+            finally:
+                index.close()
+
+    asyncio.run(verify_mcp_read_only())
 
 
 def test_real_index_and_rejected_content(upstream, tmp_path):
