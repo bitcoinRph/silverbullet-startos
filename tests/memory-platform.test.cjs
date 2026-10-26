@@ -87,10 +87,11 @@ test('failed atomic write leaves existing state intact and removes temporary fil
   assert.deepEqual(await fs.readFile(agentApi.path), before)
   assert.deepEqual((await fs.readdir(root)).sort(), ['agent-api.json', 'store.json'])
 })
-test('wrapper :3 up from :2 and down through :2 :1 :0 are no-ops with credential files byte-preserved', async () => {
+test('wrapper :4 up from :3 and down through :3 :2 :1 :0 are no-ops with credential files byte-preserved', async () => {
   const { agentApi } = await fixture()
   const versions = require('../startos/versions/current.ts')
-  assert.equal(versions.current.options.version, '2.12.1:3')
+  assert.equal(versions.current.options.version, '2.12.1:4')
+  assert.equal(versions.v2_12_1_3.options.version, '2.12.1:3')
   assert.equal(versions.v2_12_1_2.options.version, '2.12.1:2')
   assert.equal(versions.v2_12_1_1.options.version, '2.12.1:1')
   assert.equal(versions.v2_12_1_0.options.version, '2.12.1:0')
@@ -103,7 +104,15 @@ test('wrapper :3 up from :2 and down through :2 :1 :0 are no-ops with credential
   const migrated = []
   await versionGraph.migrate({
     effects: { setDataVersion: async value => { migrated.push(value.version); return null } },
-    from: ExtendedVersion.parse('2.12.1:2'), to: ExtendedVersion.parse('2.12.1:3'),
+    from: ExtendedVersion.parse('2.12.1:3'), to: ExtendedVersion.parse('2.12.1:4'),
+  })
+  assert.deepEqual(migrated, ['2.12.1:4'])
+  assert.deepEqual(await fs.readFile(storeJson.path), before)
+  assert.deepEqual(await fs.readFile(agentApi.path), apiBefore)
+  migrated.length = 0
+  await versionGraph.migrate({
+    effects: { setDataVersion: async value => { migrated.push(value.version); return null } },
+    from: ExtendedVersion.parse('2.12.1:4'), to: ExtendedVersion.parse('2.12.1:3'),
   })
   assert.deepEqual(migrated, ['2.12.1:3'])
   assert.deepEqual(await fs.readFile(storeJson.path), before)
@@ -111,9 +120,9 @@ test('wrapper :3 up from :2 and down through :2 :1 :0 are no-ops with credential
   migrated.length = 0
   await versionGraph.migrate({
     effects: { setDataVersion: async value => { migrated.push(value.version); return null } },
-    from: ExtendedVersion.parse('2.12.1:3'), to: ExtendedVersion.parse('2.12.1:0'),
+    from: ExtendedVersion.parse('2.12.1:4'), to: ExtendedVersion.parse('2.12.1:0'),
   })
-  assert.deepEqual(migrated, ['2.12.1:2', '2.12.1:1', '2.12.1:0'])
+  assert.deepEqual(migrated, ['2.12.1:3', '2.12.1:2', '2.12.1:1', '2.12.1:0'])
   assert.deepEqual(await fs.readFile(storeJson.path), before)
   assert.deepEqual(await fs.readFile(agentApi.path), apiBefore)
 })

@@ -59,11 +59,11 @@ async def client_for(space):
 
 
 @asynccontextmanager
-async def polling(index, client, monkeypatch):
+async def polling(index, client, monkeypatch, *, clock=None):
     from silverbullet_memory import server
 
     checkpoints, permits = asyncio.Queue(), asyncio.Queue()
-    clock = [0.0]
+    clock = [0.0, 1_800_000_000.0] if clock is None else clock
     tasks = []
 
     def create_task(coro):
@@ -76,7 +76,9 @@ async def polling(index, client, monkeypatch):
         await checkpoints.put(None)
         await permits.get()
 
-    monkeypatch.setattr(server, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(
+        server, "time", SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[1])
+    )
     monkeypatch.setattr(
         server,
         "asyncio",
@@ -90,6 +92,7 @@ async def polling(index, client, monkeypatch):
 
         async def advance(seconds=15):
             clock[0] += seconds
+            clock[1] += seconds
             await permits.put(None)
             await asyncio.wait_for(checkpoints.get(), 2)
 

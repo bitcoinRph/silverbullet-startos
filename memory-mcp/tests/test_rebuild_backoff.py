@@ -1,6 +1,7 @@
 """Claimed rebuilds retry on a fake monotonic clock, never wall-clock sleeps."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -34,7 +35,7 @@ def test_claimed_rebuild_backoff_grows_caps_and_skips_all_reads(tmp_path, monkey
                     space.on_get = fail
                 marker.write_text("first")
                 async with polling(index, client, monkeypatch) as advance:
-                    assert pending.read_text() == "first"
+                    assert json.loads(pending.read_text())["attempt"] == 1
                     assert not marker.exists()
                     # Each deadline is measured from the previous failed attempt.
                     for delay in (30, 60, 120, 240, 480, 900, 900):
@@ -46,7 +47,7 @@ def test_claimed_rebuild_backoff_grows_caps_and_skips_all_reads(tmp_path, monkey
                             assert index.status()["stale"] is True
                             assert index.status()["ready"] is False
                             assert index.status()["skipped"] == 0
-                            assert pending.read_text() == "first"
+                            assert pending.exists()
                         await advance()
                         assert space.inventories == inventories + 1
                         expected = 0 if failure == "inventory" else 1 if failure == "unknown" else 2
@@ -65,12 +66,13 @@ def test_rebuild_retry_success_consumes_only_claim_resets_and_recovers_on_restar
         index = MemoryIndex(tmp_path / "memory.sqlite")
         marker = tmp_path / "rebuild-request"
         pending = tmp_path / "rebuild-in-progress"
+        clock = [0.0, 1_800_000_000.0]
         try:
             async with client_for(space) as client:
                 await index.sync(client)
                 space.fail.add("Business/b.md")
                 marker.write_text("first")
-                async with polling(index, client, monkeypatch) as advance:
+                async with polling(index, client, monkeypatch, clock=clock) as advance:
                     # Concurrent request arrives while the first claim is backing off.
                     marker.write_text("second")
                     space.fail.clear()
@@ -87,7 +89,7 @@ def test_rebuild_retry_success_consumes_only_claim_resets_and_recovers_on_restar
                     space.fail.add("Business/b.md")
                     await advance()
                     assert len(space.reads) == reads + 2
-                    assert pending.read_text() == "second"
+                    assert json.loads(pending.read_text())["attempt"] == 1
                     reads = list(space.reads)
                     await advance()
                     assert space.reads == reads
@@ -101,11 +103,14 @@ def test_rebuild_retry_success_consumes_only_claim_resets_and_recovers_on_restar
                     marker.write_text("third")
                     space.fail.add("Business/b.md")
                     await advance()
-                    assert pending.read_text() == "third"
-                # A restarted poller retries the recoverable claim immediately.
+                    assert json.loads(pending.read_text())["attempt"] == 1
+                # Restart honors the persisted deadline before recovering the claim.
                 reads = len(space.reads)
                 space.fail.clear()
-                async with polling(index, client, monkeypatch) as advance:
+                clock[0] = 0.0
+                async with polling(index, client, monkeypatch, clock=clock) as advance:
+                    assert len(space.reads) == reads
+                    await advance(30)
                     assert len(space.reads) == reads + 2
                     assert index.status()["ready"] is True
                     assert not pending.exists()
@@ -163,6 +168,7 @@ def test_rebuild_poll_does_not_swallow_page_cancellation(tmp_path, monkeypatch):
                     assert tasks and all(task.cancelled() for task in tasks)
                     assert index.status()["stale"] is True
                     assert (tmp_path / "rebuild-in-progress").exists()
+                    assert (tmp_path / "rebuild-in-progress").read_text() == "cancelled claim"
         finally:
             index.close()
 

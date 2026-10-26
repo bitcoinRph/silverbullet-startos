@@ -1,6 +1,6 @@
 # Business Memory architecture and v1 security decision
 
-Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:3 fixes the
+Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:4 fixes the
 same-package sidecar using documented StartOS SDK 1.5.3 loopback/dependency patterns.
 The image context is memory-mcp/, not the repository root. Both images declare
 x86_64 and aarch64. Actual image/package execution is an independent CI gate.
@@ -100,8 +100,39 @@ Failed claimed rebuilds retain work and retry after 30, 60, 120, 240, 480, then 
 seconds, capped at 15 minutes. The monotonic deadline starts after each failed attempt;
 15-second polls before it do no inventory/page reads and keep the index stale/fail-closed.
 No incremental sync can clear stale while the requested rebuild is incomplete. Success
-resets backoff and the next poll may claim a concurrent new request. The schedule is
-in-process only: a process restart may retry immediately, then back off again on failure.
+resets backoff and the next poll may claim a concurrent new request. Only claimed-rebuild
+retry state is persisted, in the existing internal rebuild-in-progress marker on the
+rebuildable index volume. Before each claimed full rebuild, atomic write-ahead publishes
+exactly version=2, phase="in_progress", attempt (integer 1..6, saturated at 6).
+On fresh-process recovery, that interrupted attempt is counted as failed, with its
+derived 30..900-second delay starting at recovery, not attempt start. Recovery atomically
+publishes the waiting deadline so further restarts preserve the same wait. Waiting
+records have exactly version=2, phase="waiting", attempt and retry_at (finite nonnegative
+wall-clock seconds, at most 253402300799). Version-1 waiting records with exactly version,
+attempt and retry_at remain supported without losing their waits. Normal failure
+deadlines start after failure. No secrets or exception text are stored.
+Reads are capped at 256 bytes and reject duplicate/extra keys, wrong types/versions,
+non-objects, nonfinite/negative/out-of-range values and malformed JSON. Invalid state,
+including an empty :3 or oversized marker, permits one immediate attempt with the
+schedule reset. Best-effort prior-byte capture is separate from write-ahead: unreadable
+prior bytes do not prevent publication or its bounded recovery wait.
+On loading a valid claim once, expired deadlines permit immediate retry; future delays
+are clamped to 900 seconds from current wall time and converted once to a monotonic
+deadline. The next failure continues the persisted attempt, including across restarts.
+Atomic persistence uses same-directory mode-0600 exclusive temp, file fsync, replace,
+and directory fsync where supported. Failures log only rebuild_retry_persist_failed,
+retain stale/claimed state, clean temporary files where possible and use bounded
+in-memory backoff. Successful write-ahead closes the during-attempt crash loop. A crash
+before write-ahead or write-ahead persistence failure may allow immediate retry; repeated
+persistence failures cannot offer a durable guarantee. A crash after index commit but
+before claim unlink causes an idempotent rebuild after the bounded wait. This is not distributed
+scheduling or perfect power-loss durability. Cancellation propagates after atomic
+restoration of the exact prior marker bytes when captured, including empty legacy and
+valid waiting state, without recording a failure. If capture failed, cancellation leaves
+the valid in-progress record when published; no prior bytes are fabricated. If restoration
+fails, ownership is retained and a bounded fail-closed interrupted state can remain;
+only rebuild_retry_restore_failed is logged, never exception text. Normal incremental
+failures still retry every 15 seconds.
 HTTP 403/404/500, transport failures and unknown exceptions remain non-permanent;
 no status classification, per-page stale policy or content bound is relaxed.
 A completed rebuild, including
@@ -125,8 +156,8 @@ RPC-process actions are NOT a proven distributed lock. Administrators must seria
 configuration/rotation actions. Corrupt state fails MCP closed but does not block the
 SilverBullet daemon; critical recovery tasks contain no secret material.
 
-No canonical schema changes. :3 adds no-op up/down migrations from/to :2, retaining
-the historical no-op :1 -> :0 path, tested at
+No canonical schema changes. :4 adds no-op up/down migrations from/to :3 (:3 ignores
+marker content), retaining the historical no-op :3 -> :2 -> :1 -> :0 path, tested at
 function/VersionGraph level. Actual StartOS upgrade/downgrade and treatment of the
 extra index volume still require disposable StartOS evidence, not just unit tests.
 

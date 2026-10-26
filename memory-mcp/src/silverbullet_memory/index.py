@@ -110,7 +110,7 @@ class MemoryIndex:
                 )
             ],
             "upstream_version": "2.12.1",
-            "package_version": "2.12.1:3",
+            "package_version": "2.12.1:4",
             "writes_enabled": False,
             "degraded_capabilities": ["mutations_disabled_pending_real_client_gates"],
         }

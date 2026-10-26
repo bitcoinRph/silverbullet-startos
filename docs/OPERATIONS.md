@@ -4,10 +4,10 @@ No live service installation, credential rotation, infrastructure change or rele
 publication is authorized by this branch. The PR stays draft; do not merge until
 all exact-head gates and independent review pass.
 
-This branch targets wrapper 2.12.1:3, based on merge 9dc537489afe5febde32edaa965614fc469c0b28.
-Only the three approved follow-ups from :2 are addressed: bounded failed-rebuild
-retry/backoff, real-image oversized/invalid-UTF-8 tests, and Hermes in-flight dedupe
-regression tests (no provider production change). Upstream remains 2.12.1. Published
+This branch targets wrapper 2.12.1:4, based on merge 942a073917b173a90de4e48b2276f93c8c977fa0.
+Only two approved follow-ups from :3 are addressed: persist claimed-rebuild retry
+backoff across restarts and pin normal incremental polling recovery with a
+mutation-sensitive test. Upstream remains 2.12.1. Published
 assets are immutable. No release/merge automation is enabled or changed by this PR.
 
 ## Enable safely (separately approved deployment)
@@ -74,19 +74,52 @@ Failed claimed rebuild retry delays are deterministic: 30, 60, 120, 240, 480, th
 after each failed attempt. The regular 15-second poll does no inventory/page reads
 before that deadline; the requested rebuild keeps the index stale and readiness 503.
 Success consumes only rebuild-in-progress and resets the schedule; a concurrent
-rebuild-request is claimed on the next poll. Scheduling is in-process, not persisted
-or distributed: a process restart may retry the recoverable claim immediately once.
+rebuild-request is claimed on the next poll. Only claimed-rebuild retry state is
+persisted in the existing internal marker on the rebuildable index volume, never
+canonical state or backup. Before each claimed full rebuild, successful atomic
+write-ahead records exactly version=2, phase="in_progress", attempt (integer 1..6,
+capped at 6), with no deadline. A fresh process treats that interrupted attempt as
+failed and starts its derived 30/60/120/240/480/900/900-second wait at recovery, not at
+the start of the potentially long-running attempt. It publishes a waiting record so
+another restart honors the same deadline rather than renewing the wait. A waiting
+record has exactly version=2, phase="waiting", attempt and retry_at (finite wall-clock
+seconds in 0..253402300799). Existing version=1 records with exactly version, attempt,
+retry_at are still honored without losing their waits. Normal failures publish waiting
+deadlines measured after failure. No secrets or exception text are recorded. Writes use
+same-directory exclusive mode-0600 temp + file fsync + replace + directory fsync where
+supported; temporary files are cleaned where possible. Persistence failure logs only
+rebuild_retry_persist_failed, keeps the claim/index stale and uses in-memory backoff.
+On restart, a valid future wall deadline is clamped to at most 900 seconds from current
+wall time and converted once to a monotonic wait. An expired valid deadline retries
+immediately; the next failure continues the persisted attempt rather than resetting.
+Empty legacy :3 markers, oversized markers, malformed/non-object JSON, duplicate/extra
+keys, wrong version/types and negative/nonfinite/out-of-range state permit one immediate
+attempt with a reset schedule, never indefinite suppression. Reads are bounded to 256 bytes.
+Prior-byte capture is best-effort and cannot prevent write-ahead when it fails.
+Successful write-ahead prevents repeated immediate during-attempt crash-loop retries,
+including after oversized or unreadable prior state. A crash before write-ahead
+or write-ahead persistence failure may allow immediate retry; repeated failures cannot offer
+a durable guarantee. Recovery-publication failure retains the claim and a bounded
+in-process wait. A crash after index commit but before claim unlink causes an idempotent
+rebuild after the bounded wait. This is not distributed scheduling or perfect power-loss
+durability. Graceful asyncio cancellation propagates after atomically restoring the
+exact prior marker bytes when captured (including empty legacy and valid waiting records),
+without recording a failure. If capture failed, a successfully published valid in-progress
+record remains; no prior bytes are fabricated. Restore failure logs only
+rebuild_retry_restore_failed and can leave a bounded fail-closed interrupted state;
+cancellation is never swallowed.
 Normal incremental sync timing is unchanged. HTTP 403/404/500 remain transient:
 the production reader exposes only generic UpstreamError status strings, and a
 listed-page status does not prove permanent deletion or rejection. No reclassification
-or per-page stale workaround is introduced. Cancellation still propagates.
+or per-page stale workaround is introduced.
 
 Backup main: canonical main/space, store.json and agent-api.json. Never back up the
 live derived index as canonical memory. It rebuilds after restore. Test password
 byte-identity during install/update/restore/rebuild/enable/disable/rotations with a
 disposable StartOS node before production adoption.
 
-The :3 -> :2 -> :1 -> :0 migrations are intentionally no-ops: :0 ignores the extra state and index.
+The :4 -> :3 -> :2 -> :1 -> :0 migrations are intentionally no-ops: :3 ignores retry
+marker contents; :0 ignores the extra state and index.
 Source tests prove the migration graph reaches :0 without mutating the files; actual
 StartOS downgrade acceptance and retained-volume behavior remain unverified. If
 StartOS refuses it, STOP and obtain approval for uninstall-and-restore from the
@@ -119,15 +152,15 @@ must fail, not skip, if Docker/browser prerequisites are missing when enabled. L
 runs explicitly skip it without the opt-in. Local Docker is unavailable. Unit fake
 HTTP/corpus tests are not real-image evidence. Build both package architectures and
 universal; inspect with start-cli s9pk inspect FILE manifest --format json. Verify
-2.12.1:3, image set/architectures, non-root runtime, interface declarations, checksum,
+2.12.1:4, image set/architectures, non-root runtime, interface declarations, checksum,
 source gitHash and absence of node_modules in the MCP image. CI is the artifact gate.
 
 ## Required exact-head CI and review before merge
 
-- Source/protocol/package-contract tests, lint/type/build and dependency scans on :3.
+- Source/protocol/package-contract tests, lint/type/build and dependency scans on :4.
 - Re-run exact-image bearer/read/conditional ETag, hidden-path, Runtime-disabled
-  rejection and browser execution/concurrency checks on the final :3 SHA, including
-  both new permanent-page cases described below. Prior CI is not final-SHA evidence.
+  rejection and browser execution/concurrency checks on the final :4 SHA, including
+  both permanent-page cases described below. Prior CI is not final-SHA evidence.
 - Build both architecture packages and inspect their version/metadata/checksums.
   The universal package remains a separately authorized release-build gate.
 - Independent exact-diff Opus high-effort audit and all required exact-head CI checks;
@@ -172,7 +205,7 @@ neither npm dependencies nor lockfiles.
 
 ## Explicit scoped dependency risk acceptance
 
-For this requested 2.12.1:2 fix-forward, retain and explicitly accept the pre-existing
+For this wrapper, retain and explicitly accept the pre-existing
 GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404) HIGH advisory through Start SDK 1.5.3/Zod.
 The SDK and npm lockfile are unchanged from :1. npm audit reports two HIGH findings
 (Zod plus its SDK dependency chain), not a clean scan. This is a scoped acceptance,

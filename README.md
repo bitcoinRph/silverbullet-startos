@@ -4,14 +4,14 @@
 
 # SilverBullet Business Memory on StartOS
 
-Wrapper `2.12.1:3` keeps upstream `2.12.1` and fixes the opt-in, authenticated
+Wrapper `2.12.1:4` keeps upstream `2.12.1` and fixes the opt-in, authenticated
 Streamable HTTP MCP daemon with a disposable SQLite FTS5 index. The Agent API is
 disabled by default: no extra daemon, interface or `SB_AUTH_TOKEN`. The experimental
 Runtime API is now unconditionally disabled (`SB_RUNTIME_API=0`), including when
 MCP is enabled. This is an intentional change from the previous wrapper.
 
-This surgical follow-up to `:2` adds bounded failed-rebuild retry/backoff, exact-image
-oversized/invalid-UTF-8 regression coverage, and Hermes in-flight dedupe tests.
+This surgical follow-up to `:3` persists claimed-rebuild backoff across restarts
+and pins normal incremental polling recovery with a mutation-sensitive regression.
 Published assets remain immutable. This revision does not replace them or authorize
 merge, release or deployment.
 
@@ -182,8 +182,25 @@ network and inconsistent ETag failures still make readiness false and retry.
 Failed claimed operator rebuilds wait 30, 60, 120, 240, 480, then 900 seconds between
 attempts (900-second cap). The 15-second poll does no upstream reads while waiting;
 readiness remains false and new requests survive behind the current claim. Success
-resets the delay. Scheduling is process-local: restart may retry once immediately.
-The new real-image cases require exact-head CI; they are not locally verified without Docker.
+resets the delay. Before each full claimed rebuild, the existing internal
+`rebuild-in-progress` marker atomically records a bounded in-progress attempt.
+Successful write-ahead closes the during-attempt crash loop: a fresh process treats
+interruption as that attempt's failure, starts its 30..900-second wait at recovery,
+and persists the waiting deadline. Normal failure deadlines start after failure.
+Version-1 waiting records remain supported; version-2 records distinguish in-progress
+from waiting. Waiting deadlines become monotonic once per process, capped at 900
+seconds. Empty legacy, malformed or oversized state permits one immediate attempt;
+successful write-ahead prevents repeated immediate retries after during-attempt crashes,
+even if the prior marker could not be read. Cancellation propagates after atomic
+restoration of exact prior bytes when captured; otherwise the valid write-ahead remains
+if published. Restore failure can leave a bounded fail-closed interrupted state. A crash
+after index commit but before claim unlink causes an idempotent rebuild after the bounded
+wait. A crash before write-ahead or write-ahead persistence failure may allow immediate
+retry; repeated failures cannot offer a durable guarantee, although claim ownership and
+in-process waits remain.
+Atomic replacement/fsync is not a promise of perfect power-loss durability.
+Normal incremental failures still retry every 15 seconds, without rebuild backoff.
+Real-image cases require exact-head CI; they are not locally verified without Docker.
 
 ---
 
