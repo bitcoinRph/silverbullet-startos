@@ -15,8 +15,9 @@ from test_rejected_pages import Space, client_for, polling
 WALL = 1_800_000_000.0
 
 
-def record(attempt=1, retry_at=WALL + 30):
-    return {"version": 1, "attempt": attempt, "retry_at": retry_at}
+def record(attempt=1, retry_at=WALL + 30, *, version=2):
+    state = {"version": version, "attempt": attempt, "retry_at": retry_at}
+    return state | {"phase": "waiting"} if version == 2 else state
 
 
 def test_restart_honors_remaining_delay_without_any_reads(tmp_path, monkeypatch):
@@ -121,7 +122,7 @@ BAD_RECORDS = [
     '"text"',
     "{}",
     "{" * 300,
-    json.dumps(record() | {"version": 2}),
+    json.dumps(record() | {"version": 3}),
     json.dumps(record() | {"version": True}),
     json.dumps(record() | {"extra": "must not be accepted"}),
     '{"version":1,"version":1,"attempt":1,"retry_at":1800000900}',
@@ -217,11 +218,27 @@ def test_atomic_persistence_failure_keeps_claim_and_memory_backoff(
             assert source.parent == target.parent == tmp_path
             assert target == pending
             state = json.loads(source.read_text())
-            assert set(state) == {"version", "attempt", "retry_at"}
-            assert state["attempt"] == min(space.inventories, 6)
-            if space.inventories == 1:
-                assert state == record()
+            if state["phase"] == "in_progress":
+                assert state == {
+                    "version": 2,
+                    "phase": "in_progress",
+                    "attempt": min(space.inventories + 1, 6),
+                }
+            else:
+                assert set(state) == {"version", "phase", "attempt", "retry_at"}
+                assert state["attempt"] == min(space.inventories, 6)
+            if space.inventories == 0:
                 assert pending.read_bytes() == b""
+            elif space.inventories == 1:
+                assert state == record()
+                if failure == "replace":
+                    assert pending.read_bytes() == b""
+                else:
+                    assert json.loads(pending.read_text()) == {
+                        "version": 2,
+                        "phase": "in_progress",
+                        "attempt": 1,
+                    }
             events.append("replace")
             if failure == "replace":
                 raise OSError("synthetic secret exception text must not leak")
@@ -240,6 +257,7 @@ def test_atomic_persistence_failure_keeps_claim_and_memory_backoff(
                             "replace": ["file_fsync", "replace"],
                             "directory_fsync": ["file_fsync", "replace", "directory_fsync"],
                         }[failure]
+                        * 2  # Both write-ahead and final waiting publication fail.
                     )
                     assert pending.exists()
                     assert not list(tmp_path.glob("*.tmp"))
@@ -276,10 +294,24 @@ def test_retry_state_is_published_only_after_file_fsync_then_directory_fsync(tmp
             os.fsync(fd)
 
         def replace(source, target):
-            assert events == ["file"]
             assert source.parent == target.parent == tmp_path
-            assert target == pending and pending.read_bytes() == b""
-            assert json.loads(source.read_text()) == record()
+            assert target == pending
+            if space.inventories == 0:
+                assert events == ["file"]
+                assert pending.read_bytes() == b""
+                assert json.loads(source.read_text()) == {
+                    "version": 2,
+                    "phase": "in_progress",
+                    "attempt": 1,
+                }
+            else:
+                assert events == ["file", "replace", "directory", "file"]
+                assert json.loads(pending.read_text()) == {
+                    "version": 2,
+                    "phase": "in_progress",
+                    "attempt": 1,
+                }
+                assert json.loads(source.read_text()) == record()
             events.append("replace")
             os.replace(source, target)
 
@@ -289,7 +321,7 @@ def test_retry_state_is_published_only_after_file_fsync_then_directory_fsync(tmp
         try:
             async with client_for(space) as client:
                 async with polling(index, client, monkeypatch):
-                    assert events == ["file", "replace", "directory"]
+                    assert events == ["file", "replace", "directory"] * 2
                     assert json.loads(pending.read_text()) == record()
                     assert not list(tmp_path.glob("*.tmp"))
         finally:
@@ -313,10 +345,18 @@ def test_incremental_inventory_retries_every_poll_without_rebuild_backoff(tmp_pa
                         inventories = space.inventories
                         await advance()
                         assert space.inventories == inventories + 1
+                        assert not (tmp_path / "rebuild-in-progress").exists()
+                        assert not (tmp_path / "rebuild-request").exists()
                     space.inventory_failure = False
+                    space.pages["Business/a.md"] = b"bitcoin changed incremental decision"
                     inventories = space.inventories
+                    reads = len(space.reads)
                     await advance()
                     assert space.inventories == inventories + 1
+                    assert len(space.reads) == reads + 1
+                    page = index.get("Business/a.md")
+                    assert page is not None
+                    assert page["content"] == space.pages["Business/a.md"].decode()
                     assert index.status()["ready"] is True
                     assert not (tmp_path / "rebuild-in-progress").exists()
         finally:

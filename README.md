@@ -182,11 +182,20 @@ network and inconsistent ETag failures still make readiness false and retry.
 Failed claimed operator rebuilds wait 30, 60, 120, 240, 480, then 900 seconds between
 attempts (900-second cap). The 15-second poll does no upstream reads while waiting;
 readiness remains false and new requests survive behind the current claim. Success
-resets the delay. The internal `rebuild-in-progress` marker stores a bounded attempt
-and wall deadline atomically on the disposable index volume; restart converts the
-remaining delay to monotonic time once, capped at 15 minutes. Empty legacy or malformed
-state permits one immediate retry. Persistence failure retains the claim and in-memory
-backoff; a crash before persistence may cause one immediate retry on restart.
+resets the delay. Before each full claimed rebuild, the existing internal
+`rebuild-in-progress` marker atomically records a bounded in-progress attempt.
+Successful write-ahead closes the during-attempt crash loop: a fresh process treats
+interruption as that attempt's failure, starts its 30..900-second wait at recovery,
+and persists the waiting deadline. Normal failure deadlines start after failure.
+Version-1 waiting records remain supported; version-2 records distinguish in-progress
+from waiting. Waiting deadlines become monotonic once per process, capped at 900
+seconds. Empty legacy or malformed state permits one immediate retry. Cancellation
+propagates after atomic restoration of the exact prior marker bytes; restore failure
+can leave a bounded fail-closed interrupted state. A crash after index commit but before
+claim unlink causes an idempotent rebuild after the bounded wait. A crash before
+write-ahead or write failure may allow immediate retry; repeated persistence failures
+cannot offer a durable guarantee, although claim ownership and in-process waits remain.
+Atomic replacement/fsync is not a promise of perfect power-loss durability.
 Normal incremental failures still retry every 15 seconds, without rebuild backoff.
 Real-image cases require exact-head CI; they are not locally verified without Docker.
 

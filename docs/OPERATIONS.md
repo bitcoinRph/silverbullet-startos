@@ -76,9 +76,16 @@ before that deadline; the requested rebuild keeps the index stale and readiness 
 Success consumes only rebuild-in-progress and resets the schedule; a concurrent
 rebuild-request is claimed on the next poll. Only claimed-rebuild retry state is
 persisted in the existing internal marker on the rebuildable index volume, never
-canonical state or backup. The small JSON record has exactly version=1, attempt
-(integer 1..6, capped at 6) and retry_at (finite wall-clock seconds in 0..253402300799).
-The attempt derives the delay. No secrets or exception text are recorded. Writes use
+canonical state or backup. Before each claimed full rebuild, successful atomic
+write-ahead records exactly version=2, phase="in_progress", attempt (integer 1..6,
+capped at 6), with no deadline. A fresh process treats that interrupted attempt as
+failed and starts its derived 30/60/120/240/480/900/900-second wait at recovery, not at
+the start of the potentially long-running attempt. It publishes a waiting record so
+another restart honors the same deadline rather than renewing the wait. A waiting
+record has exactly version=2, phase="waiting", attempt and retry_at (finite wall-clock
+seconds in 0..253402300799). Existing version=1 records with exactly version, attempt,
+retry_at are still honored without losing their waits. Normal failures publish waiting
+deadlines measured after failure. No secrets or exception text are recorded. Writes use
 same-directory exclusive mode-0600 temp + file fsync + replace + directory fsync where
 supported; temporary files are cleaned where possible. Persistence failure logs only
 rebuild_retry_persist_failed, keeps the claim/index stale and uses in-memory backoff.
@@ -88,12 +95,19 @@ immediately; the next failure continues the persisted attempt rather than resett
 Empty legacy :3 markers, malformed/non-object JSON, duplicate/extra keys, wrong
 version/types and negative/nonfinite/out-of-range state permit one immediate retry
 with a reset schedule, never indefinite suppression. Reads are bounded to 256 bytes.
-A crash in the tiny window after failure but before atomic persistence may cause one
-immediate retry on restart. This is not distributed scheduling or perfect crash durability.
+Successful write-ahead closes the during-attempt crash loop. A crash before write-ahead
+or write failure may allow immediate retry; repeated persistence failures cannot offer
+a durable guarantee. Recovery-publication failure retains the claim and a bounded
+in-process wait. A crash after index commit but before claim unlink causes an idempotent
+rebuild after the bounded wait. This is not distributed scheduling or perfect power-loss
+durability. Graceful asyncio cancellation propagates after atomically restoring the
+exact prior marker bytes (including empty legacy and valid waiting records), without
+recording a failure. Restore failure logs only rebuild_retry_restore_failed and can
+leave a bounded fail-closed interrupted state; cancellation is never swallowed.
 Normal incremental sync timing is unchanged. HTTP 403/404/500 remain transient:
 the production reader exposes only generic UpstreamError status strings, and a
 listed-page status does not prove permanent deletion or rejection. No reclassification
-or per-page stale workaround is introduced. Cancellation still propagates.
+or per-page stale workaround is introduced.
 
 Backup main: canonical main/space, store.json and agent-api.json. Never back up the
 live derived index as canonical memory. It rebuilds after restore. Test password
