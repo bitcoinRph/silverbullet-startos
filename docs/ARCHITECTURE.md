@@ -1,6 +1,6 @@
 # Business Memory architecture and v1 security decision
 
-Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:2 fixes the
+Upstream SilverBullet 2.12.1 remains canonical. Wrapper ExVer 2.12.1:3 fixes the
 same-package sidecar using documented StartOS SDK 1.5.3 loopback/dependency patterns.
 The image context is memory-mcp/, not the repository root. Both images declare
 x86_64 and aarch64. Actual image/package execution is an independent CI gate.
@@ -96,7 +96,15 @@ deletion. memory_status reports the total skipped count and at most ten path/rea
 details (512 characters per path), never page bodies. Unknown exceptions fail closed.
 Operator actions publish rebuild-request using temp-file/fsync/rename. The poller
 atomically claims it as rebuild-in-progress; a concurrent new request remains untouched.
-Transient failures retain claimed work for retry. A completed rebuild, including
+Failed claimed rebuilds retain work and retry after 30, 60, 120, 240, 480, then 900
+seconds, capped at 15 minutes. The monotonic deadline starts after each failed attempt;
+15-second polls before it do no inventory/page reads and keep the index stale/fail-closed.
+No incremental sync can clear stale while the requested rebuild is incomplete. Success
+resets backoff and the next poll may claim a concurrent new request. The schedule is
+in-process only: a process restart may retry immediately, then back off again on failure.
+HTTP 403/404/500, transport failures and unknown exceptions remain non-permanent;
+no status classification, per-page stale policy or content bound is relaxed.
+A completed rebuild, including
 permanent skips, removes only the claimed marker; restart cannot replay consumed work.
 A rebuild writes a temporary DB, validates/checkpoints,
 then atomically replaces the derived DB. No canonical data or durable idempotency
@@ -117,7 +125,7 @@ RPC-process actions are NOT a proven distributed lock. Administrators must seria
 configuration/rotation actions. Corrupt state fails MCP closed but does not block the
 SilverBullet daemon; critical recovery tasks contain no secret material.
 
-No canonical schema changes. :2 includes a no-op down migration to :1, retaining
+No canonical schema changes. :3 adds no-op up/down migrations from/to :2, retaining
 the historical no-op :1 -> :0 path, tested at
 function/VersionGraph level. Actual StartOS upgrade/downgrade and treatment of the
 extra index volume still require disposable StartOS evidence, not just unit tests.
@@ -140,7 +148,10 @@ agent/turn_context.py:929, run_agent.py:922). The cache is session-scoped, lates
 generation, one-shot, expires 30 minutes after fetch completion, and is invalidated on initialization
 and shutdown. One background worker plus one coalesced pending request bounds work;
 superseded results cannot publish. Re-queuing the same completed query replaces the
-payload and timestamp. No-network is_available and no write hooks remain.
+payload and timestamp. Identical in-flight queue calls coalesce to one search; event/fake-clock
+tests pin both direct queue calls and the prefetch-miss/post-turn queue lifecycle, worker
+termination, single payloads and fresh completed-query timestamps. No-network is_available
+and no write hooks remain.
 Recall is explicitly previous-turn context, not a claim of relevance to a new topic;
 MCP search remains the current-query retrieval path. JSON-quoted bounded snippets
 cannot break the untrusted-content fence. See integrations/hermes/README.md.

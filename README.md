@@ -4,15 +4,16 @@
 
 # SilverBullet Business Memory on StartOS
 
-Wrapper `2.12.1:2` keeps upstream `2.12.1` and fixes the opt-in, authenticated
+Wrapper `2.12.1:3` keeps upstream `2.12.1` and fixes the opt-in, authenticated
 Streamable HTTP MCP daemon with a disposable SQLite FTS5 index. The Agent API is
 disabled by default: no extra daemon, interface or `SB_AUTH_TOKEN`. The experimental
 Runtime API is now unconditionally disabled (`SB_RUNTIME_API=0`), including when
 MCP is enabled. This is an intentional change from the previous wrapper.
 
-This is the fix-forward for `:1`: PR #13 merged before final review completed.
-`v2.12.1_1` is allowed to publish by the owner's decision; its assets are immutable.
-This revision does not replace them or authorize merge, release or deployment.
+This surgical follow-up to `:2` adds bounded failed-rebuild retry/backoff, exact-image
+oversized/invalid-UTF-8 regression coverage, and Hermes in-flight dedupe tests.
+Published assets remain immutable. This revision does not replace them or authorize
+merge, release or deployment.
 
 Actual MCP mutations remain hard-disabled in v1. The six described tools are
 `memory_status`, `memory_search`, `memory_get`, `memory_backlinks`, `memory_create`
@@ -178,6 +179,11 @@ outage. `memory_status` reports `skipped` and at most ten path/reason details.
 Previously indexed text is removed when a page is permanently rejected. Unchanged
 skips are cached across restart; changed pages are retried. Transient inventory,
 network and inconsistent ETag failures still make readiness false and retry.
+Failed claimed operator rebuilds wait 30, 60, 120, 240, 480, then 900 seconds between
+attempts (900-second cap). The 15-second poll does no upstream reads while waiting;
+readiness remains false and new requests survive behind the current claim. Success
+resets the delay. Scheduling is process-local: restart may retry once immediately.
+The new real-image cases require exact-head CI; they are not locally verified without Docker.
 
 ---
 

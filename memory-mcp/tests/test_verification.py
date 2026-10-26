@@ -10,7 +10,7 @@ def test_status_reports_fix_forward_wrapper_without_upstream_change(tmp_path):
     from silverbullet_memory.index import MemoryIndex
 
     index = MemoryIndex(tmp_path / "memory.sqlite")
-    assert index.status()["package_version"] == "2.12.1:2"
+    assert index.status()["package_version"] == "2.12.1:3"
     assert index.status()["upstream_version"] == "2.12.1"
     index.close()
 

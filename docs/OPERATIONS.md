@@ -4,11 +4,11 @@ No live service installation, credential rotation, infrastructure change or rele
 publication is authorized by this branch. The PR stays draft; do not merge until
 all exact-head gates and independent review pass.
 
-This branch targets wrapper 2.12.1:2, based on merge 8f47f16bdbcd2415773740e8423a3624784fdef4.
-PR #13 (:1) was merged by the owner before final review finished. The owner's explicit
-decision permits v2.12.1_1 publication; never replace that tag/release or its assets.
-This is a fix-forward, not a retroactive acceptance of the rejected audit. Upstream
-SilverBullet remains 2.12.1. No release/merge automation is enabled by this PR.
+This branch targets wrapper 2.12.1:3, based on merge 9dc537489afe5febde32edaa965614fc469c0b28.
+Only the three approved follow-ups from :2 are addressed: bounded failed-rebuild
+retry/backoff, real-image oversized/invalid-UTF-8 tests, and Hermes in-flight dedupe
+regression tests (no provider production change). Upstream remains 2.12.1. Published
+assets are immutable. No release/merge automation is enabled or changed by this PR.
 
 ## Enable safely (separately approved deployment)
 
@@ -69,12 +69,24 @@ original path for the next poll. Transient failed rebuilds retain the previous D
 does not full-refetch unchanged pages on the next poll or restart. Review safe logs
 and credential/loopback/auth status without printing secrets.
 
+Failed claimed rebuild retry delays are deterministic: 30, 60, 120, 240, 480, then
+900 seconds, capped at 15 minutes without jitter. The deadline uses monotonic time
+after each failed attempt. The regular 15-second poll does no inventory/page reads
+before that deadline; the requested rebuild keeps the index stale and readiness 503.
+Success consumes only rebuild-in-progress and resets the schedule; a concurrent
+rebuild-request is claimed on the next poll. Scheduling is in-process, not persisted
+or distributed: a process restart may retry the recoverable claim immediately once.
+Normal incremental sync timing is unchanged. HTTP 403/404/500 remain transient:
+the production reader exposes only generic UpstreamError status strings, and a
+listed-page status does not prove permanent deletion or rejection. No reclassification
+or per-page stale workaround is introduced. Cancellation still propagates.
+
 Backup main: canonical main/space, store.json and agent-api.json. Never back up the
 live derived index as canonical memory. It rebuilds after restore. Test password
 byte-identity during install/update/restore/rebuild/enable/disable/rotations with a
 disposable StartOS node before production adoption.
 
-The :2 -> :1 -> :0 migrations are intentionally no-ops: :0 ignores the extra state and index.
+The :3 -> :2 -> :1 -> :0 migrations are intentionally no-ops: :0 ignores the extra state and index.
 Source tests prove the migration graph reaches :0 without mutating the files; actual
 StartOS downgrade acceptance and retained-volume behavior remain unverified. If
 StartOS refuses it, STOP and obtain approval for uninstall-and-restore from the
@@ -107,19 +119,46 @@ must fail, not skip, if Docker/browser prerequisites are missing when enabled. L
 runs explicitly skip it without the opt-in. Local Docker is unavailable. Unit fake
 HTTP/corpus tests are not real-image evidence. Build both package architectures and
 universal; inspect with start-cli s9pk inspect FILE manifest --format json. Verify
-2.12.1:2, image set/architectures, non-root runtime, interface declarations, checksum,
+2.12.1:3, image set/architectures, non-root runtime, interface declarations, checksum,
 source gitHash and absence of node_modules in the MCP image. CI is the artifact gate.
 
 ## Required exact-head CI and review before merge
 
-- Source/protocol/package-contract tests, lint/type/build and dependency scans on :2.
+- Source/protocol/package-contract tests, lint/type/build and dependency scans on :3.
 - Re-run exact-image bearer/read/conditional ETag, hidden-path, Runtime-disabled
-  rejection and browser execution/concurrency checks on the final :2 SHA. The :1
-  review accepted prior CI metadata; that is not final-SHA :2 execution evidence.
+  rejection and browser execution/concurrency checks on the final :3 SHA, including
+  both new permanent-page cases described below. Prior CI is not final-SHA evidence.
 - Build both architecture packages and inspect their version/metadata/checksums.
   The universal package remains a separately authorized release-build gate.
 - Independent exact-diff Opus high-effort audit and all required exact-head CI checks;
   local coder verification does not substitute for that final review.
+
+Exact-image permanent-page coverage (Docker-gated locally, mandatory in the existing
+CI real-image job and release gate) uses ghcr.io/silverbulletmd/silverbullet:2.12.1:
+
+Each new rejection case has its own disposable container and mounted space so prior
+browser synchronization or another case's filesystem cleanup cannot alter its corpus.
+
+- A 65,537-byte Markdown page is uploaded to the disposable /.fs fixture. Assert it
+  is listed with the exact size and served byte-for-byte with the matching SHA-256 ETag.
+  The production SilverBulletClient must raise PermanentPageError(page_too_large).
+- A page containing literal 0xff/0xfe bytes is atomically written through the fixture's
+  mounted /data volume, bypassing any text PUT decoding. Assert the same exact listing,
+  HTTP 200/raw bytes/ETag; the production client must raise
+  PermanentPageError(invalid_markdown_encoding). There is no alternate outcome/xfail.
+  Source basis: upstream tag 2.12.1 server-common/src/space/disk.rs read_file uses
+  fs::read; server/src/handlers/fs.rs handle_fs_get hashes bytes and returns Body::from(data).
+- Both cases first index valid old content, then use production MemoryIndex.sync to
+  remove it, report the exact skip reason, keep the readable corpus ready/searchable,
+  and prove two subsequent syncs do not fetch the unchanged rejected page. HTTP request
+  hooks only count real requests; no transport/client/index mock is substituted.
+- All pre-existing Runtime/auth/conditional-write/browser concurrency tests remain.
+  Local collection/skips are not image execution evidence. If CI cannot create/list/serve
+  the invalid-byte page exactly as asserted, stop for review; do not broaden accepted
+  responses or weaken UTF-8/64 KiB rejection to make the gate green.
+
+The scoped npm advisory acceptance below is unchanged from :2; this revision changes
+neither npm dependencies nor lockfiles.
 
 ## Remaining separately approved live deployment gates
 

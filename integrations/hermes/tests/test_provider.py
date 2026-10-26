@@ -92,6 +92,84 @@ def test_contract_registration_local_availability_and_config(provider, monkeypat
     obj.shutdown()
 
 
+@pytest.mark.parametrize("first_call", ["queue", "prefetch-miss"])
+def test_inflight_identical_requests_dedupe_but_consumed_query_refreshes(
+    provider, monkeypatch, first_call
+):
+    obj, module, home = provider
+    entered = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+    calls, workers = [], []
+    clock = [10.0]
+    monkeypatch.setattr(
+        module, "time", types.SimpleNamespace(monotonic=lambda: clock[0])
+    )
+
+    def spawn(target, *, name):
+        worker = threading.Thread(target=target, name=name, daemon=True)
+        workers.append(worker)
+        return worker
+
+    def search(self, query):
+        calls.append(query)
+        number = len(calls)
+        if number <= 2:
+            entered[number - 1].set()
+            assert release[number - 1].wait(2)
+        return [{"path": "Business/dedupe.md", "snippet": f"revision-{number}"}]
+
+    monkeypatch.setattr(module, "spawn_context_thread", spawn)
+    monkeypatch.setattr(module.MemoryClient, "search", search)
+    obj.initialize("session", hermes_home=str(home))
+    try:
+        if first_call == "queue":
+            obj.queue_prefetch("same", session_id="session")
+        else:
+            # Host pre-turn cache miss queues, then post-turn queues the same key.
+            assert obj.prefetch("same", session_id="session") == ""
+        assert entered[0].wait(2)
+        obj.queue_prefetch("same", session_id="session")
+        assert obj.prefetch("next turn while fetching", session_id="session") == ""
+        clock[0] = 100.0  # Timestamp must come from completion, not queue time.
+        release[0].set()
+        # Release is harmless for the correct code, and prevents a mutant hanging.
+        release[1].set()
+        workers[0].join(timeout=2)
+        assert not workers[0].is_alive()
+        assert calls == ["same"]
+        assert len(workers) == 1
+        clock[0] += 60
+        first = obj.prefetch("human next turn", session_id="session")
+        assert first.count("Business/dedupe.md") == 1
+        assert first.count("revision-1") == 1
+
+        release[1].clear()
+        obj.queue_prefetch("same", session_id="session")
+        assert entered[1].wait(2)
+        obj.queue_prefetch("same", session_id="session")
+        assert obj.prefetch("another caller", session_id="session") == ""
+        clock[0] = 2000.0
+        release[1].set()
+        workers[-1].join(timeout=2)
+        assert all(not worker.is_alive() for worker in workers)
+        assert len(workers) == 2
+        assert calls == ["same", "same"]
+        clock[0] += 1799  # Old completion is expired; refreshed completion is not.
+        second = obj.prefetch("later human turn", session_id="session")
+        assert second.count("Business/dedupe.md") == 1
+        assert second.count("revision-2") == 1
+        assert "revision-1" not in second
+    finally:
+        for event in release:
+            event.set()
+        obj.shutdown()
+        for worker in workers:
+            worker.join(timeout=2)
+        assert all(not worker.is_alive() for worker in workers)
+    assert obj.prefetch("same", session_id="session") == ""
+    assert calls == ["same", "same"]
+
+
 def test_cache_expiry_refreshes_same_query(provider, monkeypatch):
     obj, module, home = provider
     calls = []
