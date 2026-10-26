@@ -315,8 +315,11 @@ def create_app(
                         retry_attempt = min(retry_attempt + 1, REBUILD_RETRY_MAX_ATTEMPT)
                         try:
                             # Retain exact bounded prior bytes for graceful cancellation.
-                            # If capture/publication fails, keep ownership and still try sync.
                             prior = _read_rebuild_marker(pending)
+                        except Exception:
+                            LOG.warning("rebuild_retry_persist_failed")
+                        try:
+                            # Failed capture must not prevent write-ahead before sync.
                             _persist_rebuild_state(
                                 pending,
                                 {"version": 2, "phase": "in_progress", "attempt": retry_attempt},

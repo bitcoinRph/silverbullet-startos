@@ -92,18 +92,22 @@ rebuild_retry_persist_failed, keeps the claim/index stale and uses in-memory bac
 On restart, a valid future wall deadline is clamped to at most 900 seconds from current
 wall time and converted once to a monotonic wait. An expired valid deadline retries
 immediately; the next failure continues the persisted attempt rather than resetting.
-Empty legacy :3 markers, malformed/non-object JSON, duplicate/extra keys, wrong
-version/types and negative/nonfinite/out-of-range state permit one immediate retry
-with a reset schedule, never indefinite suppression. Reads are bounded to 256 bytes.
-Successful write-ahead closes the during-attempt crash loop. A crash before write-ahead
-or write failure may allow immediate retry; repeated persistence failures cannot offer
+Empty legacy :3 markers, oversized markers, malformed/non-object JSON, duplicate/extra
+keys, wrong version/types and negative/nonfinite/out-of-range state permit one immediate
+attempt with a reset schedule, never indefinite suppression. Reads are bounded to 256 bytes.
+Prior-byte capture is best-effort and cannot prevent write-ahead when it fails.
+Successful write-ahead prevents repeated immediate during-attempt crash-loop retries,
+including after oversized or unreadable prior state. A crash before write-ahead
+or write-ahead persistence failure may allow immediate retry; repeated failures cannot offer
 a durable guarantee. Recovery-publication failure retains the claim and a bounded
 in-process wait. A crash after index commit but before claim unlink causes an idempotent
 rebuild after the bounded wait. This is not distributed scheduling or perfect power-loss
 durability. Graceful asyncio cancellation propagates after atomically restoring the
-exact prior marker bytes (including empty legacy and valid waiting records), without
-recording a failure. Restore failure logs only rebuild_retry_restore_failed and can
-leave a bounded fail-closed interrupted state; cancellation is never swallowed.
+exact prior marker bytes when captured (including empty legacy and valid waiting records),
+without recording a failure. If capture failed, a successfully published valid in-progress
+record remains; no prior bytes are fabricated. Restore failure logs only
+rebuild_retry_restore_failed and can leave a bounded fail-closed interrupted state;
+cancellation is never swallowed.
 Normal incremental sync timing is unchanged. HTTP 403/404/500 remain transient:
 the production reader exposes only generic UpstreamError status strings, and a
 listed-page status does not prove permanent deletion or rejection. No reclassification

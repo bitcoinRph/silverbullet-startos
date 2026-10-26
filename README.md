@@ -189,12 +189,15 @@ interruption as that attempt's failure, starts its 30..900-second wait at recove
 and persists the waiting deadline. Normal failure deadlines start after failure.
 Version-1 waiting records remain supported; version-2 records distinguish in-progress
 from waiting. Waiting deadlines become monotonic once per process, capped at 900
-seconds. Empty legacy or malformed state permits one immediate retry. Cancellation
-propagates after atomic restoration of the exact prior marker bytes; restore failure
-can leave a bounded fail-closed interrupted state. A crash after index commit but before
-claim unlink causes an idempotent rebuild after the bounded wait. A crash before
-write-ahead or write failure may allow immediate retry; repeated persistence failures
-cannot offer a durable guarantee, although claim ownership and in-process waits remain.
+seconds. Empty legacy, malformed or oversized state permits one immediate attempt;
+successful write-ahead prevents repeated immediate retries after during-attempt crashes,
+even if the prior marker could not be read. Cancellation propagates after atomic
+restoration of exact prior bytes when captured; otherwise the valid write-ahead remains
+if published. Restore failure can leave a bounded fail-closed interrupted state. A crash
+after index commit but before claim unlink causes an idempotent rebuild after the bounded
+wait. A crash before write-ahead or write-ahead persistence failure may allow immediate
+retry; repeated failures cannot offer a durable guarantee, although claim ownership and
+in-process waits remain.
 Atomic replacement/fsync is not a promise of perfect power-loss durability.
 Normal incremental failures still retry every 15 seconds, without rebuild backoff.
 Real-image cases require exact-head CI; they are not locally verified without Docker.

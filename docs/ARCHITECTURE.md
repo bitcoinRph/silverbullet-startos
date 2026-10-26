@@ -113,7 +113,9 @@ attempt and retry_at remain supported without losing their waits. Normal failure
 deadlines start after failure. No secrets or exception text are stored.
 Reads are capped at 256 bytes and reject duplicate/extra keys, wrong types/versions,
 non-objects, nonfinite/negative/out-of-range values and malformed JSON. Invalid state,
-including an empty :3 marker, permits one immediate retry with the schedule reset.
+including an empty :3 or oversized marker, permits one immediate attempt with the
+schedule reset. Best-effort prior-byte capture is separate from write-ahead: unreadable
+prior bytes do not prevent publication or its bounded recovery wait.
 On loading a valid claim once, expired deadlines permit immediate retry; future delays
 are clamped to 900 seconds from current wall time and converted once to a monotonic
 deadline. The next failure continues the persisted attempt, including across restarts.
@@ -121,14 +123,16 @@ Atomic persistence uses same-directory mode-0600 exclusive temp, file fsync, rep
 and directory fsync where supported. Failures log only rebuild_retry_persist_failed,
 retain stale/claimed state, clean temporary files where possible and use bounded
 in-memory backoff. Successful write-ahead closes the during-attempt crash loop. A crash
-before write-ahead or write failure may allow immediate retry; repeated persistence
-failures cannot offer a durable guarantee. A crash after index commit but before claim
-unlink causes an idempotent rebuild after the bounded wait. This is not distributed
+before write-ahead or write-ahead persistence failure may allow immediate retry; repeated
+persistence failures cannot offer a durable guarantee. A crash after index commit but
+before claim unlink causes an idempotent rebuild after the bounded wait. This is not distributed
 scheduling or perfect power-loss durability. Cancellation propagates after atomic
-restoration of the exact prior marker bytes, including empty legacy and valid waiting
-state, without recording a failure. If restoration fails, ownership is retained and a
-bounded fail-closed interrupted state can remain; only rebuild_retry_restore_failed is
-logged, never exception text. Normal incremental failures still retry every 15 seconds.
+restoration of the exact prior marker bytes when captured, including empty legacy and
+valid waiting state, without recording a failure. If capture failed, cancellation leaves
+the valid in-progress record when published; no prior bytes are fabricated. If restoration
+fails, ownership is retained and a bounded fail-closed interrupted state can remain;
+only rebuild_retry_restore_failed is logged, never exception text. Normal incremental
+failures still retry every 15 seconds.
 HTTP 403/404/500, transport failures and unknown exceptions remain non-permanent;
 no status classification, per-page stale policy or content bound is relaxed.
 A completed rebuild, including
