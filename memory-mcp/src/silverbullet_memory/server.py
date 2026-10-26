@@ -1,6 +1,7 @@
 """Stateless MCP over real Streamable HTTP with bounds ahead of JSON parsing."""
 
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -30,6 +31,64 @@ WRITES = {"memory_create", "memory_replace_text"}
 POLL_SECONDS = 15
 REBUILD_RETRY_INITIAL_SECONDS = 30
 REBUILD_RETRY_MAX_SECONDS = 15 * 60
+REBUILD_RETRY_MAX_ATTEMPT = 6
+
+
+def _load_rebuild_retry(pending: Path) -> tuple[int, float]:
+    """Untrusted disposable state: invalid/legacy data permits one immediate retry."""
+    try:
+        with pending.open("rb") as file:
+            raw = file.read(257)
+        if len(raw) > 256:
+            return 0, 0.0
+        state = bounded_json(raw)
+        if not isinstance(state, dict) or set(state) != {"version", "attempt", "retry_at"}:
+            return 0, 0.0
+        version, attempt, deadline = state["version"], state["attempt"], state["retry_at"]
+        if (
+            type(version) is not int
+            or version != 1
+            or type(attempt) is not int
+            or not 1 <= attempt <= REBUILD_RETRY_MAX_ATTEMPT
+            or type(deadline) not in (int, float)
+            # Also rejects NaN/infinity; year 9999 is the largest accepted wall deadline.
+            or not 0 <= deadline <= 253402300799
+        ):
+            return 0, 0.0
+        remaining = max(0.0, min(deadline - time.time(), REBUILD_RETRY_MAX_SECONDS))
+        return attempt, time.monotonic() + remaining
+    except (OSError, ValueError, UnicodeError):
+        return 0, 0.0
+
+
+def _persist_rebuild_retry(pending: Path, attempt: int, delay: int) -> None:
+    """Replace only the claim, never a concurrent rebuild-request; no failure text."""
+    temporary = pending.with_name(f".{pending.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        with os.fdopen(
+            os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w"
+        ) as file:
+            json.dump(
+                {"version": 1, "attempt": attempt, "retry_at": time.time() + delay},
+                file,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, pending)
+        directory = os.open(pending.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            try:
+                os.fsync(directory)
+            except OSError as error:
+                if error.errno not in (errno.EINVAL, errno.ENOTSUP):
+                    raise
+        finally:
+            os.close(directory)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
 
 
 class Boundary:
@@ -193,7 +252,8 @@ def create_app(
         marker = tools.index.path.parent / "rebuild-request"
         pending = marker.with_name("rebuild-in-progress")
         retry_at = 0.0
-        retry_delay = REBUILD_RETRY_INITIAL_SECONDS
+        retry_attempt = 0
+        retry_loaded = False
         while True:
             rebuild = attempted = False
             try:
@@ -203,6 +263,9 @@ def create_app(
                     with suppress(FileNotFoundError):
                         marker.rename(pending)
                 rebuild = os.path.lexists(pending)
+                if rebuild and not retry_loaded:
+                    retry_attempt, retry_at = _load_rebuild_retry(pending)
+                    retry_loaded = True
                 if rebuild and time.monotonic() < retry_at:
                     # Do not let an incremental sync clear stale while claimed work waits.
                     tools.index.stale = True
@@ -212,14 +275,24 @@ def create_app(
                     if rebuild and not tools.index.stale:
                         pending.unlink()
                         retry_at = 0.0
-                        retry_delay = REBUILD_RETRY_INITIAL_SECONDS
+                        retry_attempt = 0
+                        retry_loaded = False
             except Exception:
                 tools.index.stale = True
                 LOG.warning("index_sync_failed")
             if rebuild and attempted and tools.index.stale:
-                # Process-local, measured after failure; restart may retry immediately.
+                retry_attempt = min(retry_attempt + 1, REBUILD_RETRY_MAX_ATTEMPT)
+                retry_delay = min(
+                    REBUILD_RETRY_INITIAL_SECONDS * 2 ** (retry_attempt - 1),
+                    REBUILD_RETRY_MAX_SECONDS,
+                )
+                # Wait on monotonic time even if persistence fails. A crash before
+                # publication can cause one immediate retry on the next process start.
                 retry_at = time.monotonic() + retry_delay
-                retry_delay = min(retry_delay * 2, REBUILD_RETRY_MAX_SECONDS)
+                try:
+                    _persist_rebuild_retry(pending, retry_attempt, retry_delay)
+                except Exception:
+                    LOG.warning("rebuild_retry_persist_failed")
             await asyncio.sleep(POLL_SECONDS)
 
     @asynccontextmanager

@@ -56,6 +56,19 @@ export const v2_11_0_0 = VersionInfo.of({
 })
 
 export const current = VersionInfo.of({
+  version: '2.12.1:4',
+  releaseNotes: {
+    en_US:
+      'Persist bounded claimed-rebuild retry state across process restarts on the disposable index volume. Pin normal incremental polling recovery. SilverBullet stays at 2.12.1; security, read-only policy, canonical notes and credentials are unchanged.',
+  },
+  migrations: {
+    up: async () => {},
+    // :3 ignores retry marker contents; canonical state and index schema are unchanged.
+    down: async () => {},
+  },
+})
+
+export const v2_12_1_3 = VersionInfo.of({
   version: '2.12.1:3',
   releaseNotes: {
     en_US:
